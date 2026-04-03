@@ -1,8 +1,17 @@
-## Interface: 20400
+## Interface: 100207
 ## Title: RedDKP
-## Notes: Raid DKP style tracker
 ## Author: Lunátic
 ## Version: 1.0.0
-## SavedVariables: RedDKP_Data, RedDKP_Config
+## Notes: Distributed DKP with audit log, undo, and sync
+## SavedVariables: RedDKP_Data, RedDKP_Config, RedDKP_Audit
 
-RedDKP.lua
+Core.lua
+Data.lua
+Audit.lua
+Undo.lua
+Sync.lua
+UI_DKP.lua
+UI_Editors.lua
+UI_ImportExport.lua
+UI_AuditLog.lua
+Init.lua
