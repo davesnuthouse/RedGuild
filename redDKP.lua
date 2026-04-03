@@ -1,610 +1,755 @@
+--------------------------------------------------
+-- RedDKP - Core / Bootstrap / Audit / Undo
+--------------------------------------------------
+
 local ADDON_NAME = ...
+local RedDKP = {}
+_G.RedDKP = RedDKP
 
 --------------------------------------------------
--- SAVED VARIABLES / CORE
+-- Saved variables
 --------------------------------------------------
 
-RedDKP_Data      = RedDKP_Data      or {}
-RedDKP_Config    = RedDKP_Config    or {}
-RedDKP_LastSync  = RedDKP_LastSync  or 0
+RedDKP_Data   = RedDKP_Data   or {}   -- per-player DKP rows
+RedDKP_Config = RedDKP_Config or {}   -- settings, editors, etc.
+RedDKP_Audit  = RedDKP_Audit  or {}   -- audit log entries
 
-local function EnsureSaved()
-    RedDKP_Data   = RedDKP_Data   or {}
-    RedDKP_Config = RedDKP_Config or {}
+RedDKP_Config.authorizedEditors = RedDKP_Config.authorizedEditors or {}
 
-    RedDKP_Config.authorizedEditors = RedDKP_Config.authorizedEditors or {}
-    RedDKP_Config.sortField         = RedDKP_Config.sortField         or "player"
-    if RedDKP_Config.sortAscending == nil then
-        RedDKP_Config.sortAscending = true
-    end
-    RedDKP_Config.minimapAngle = RedDKP_Config.minimapAngle or 45
-end
+--------------------------------------------------
+-- Basic utilities
+--------------------------------------------------
 
 local function Print(msg)
-    DEFAULT_CHAT_FRAME:AddMessage("|cffff5555RedDKP|r: " .. tostring(msg))
+    DEFAULT_CHAT_FRAME:AddMessage("|cffff5555RedDKP:|r " .. tostring(msg))
+end
+
+local function Now()
+    return date("%Y-%m-%d %H:%M:%S")
+end
+
+local function NewAuditId()
+    return string.format("%08x", math.random(0, 0xFFFFFFFF))
+end
+
+--------------------------------------------------
+-- Permissions
+--------------------------------------------------
+
+local function IsGuildOfficer()
+    local _, _, rankIndex = GetGuildInfo("player")
+    return rankIndex == 0 or rankIndex == 1
 end
 
 local function IsAuthorized()
-    EnsureSaved()
+    if IsGuildOfficer() then
+        return true
+    end
     local name = UnitName("player")
     return RedDKP_Config.authorizedEditors[name] == true
 end
 
+--------------------------------------------------
+-- Data helpers
+--------------------------------------------------
+
+local function EnsureSaved()
+    RedDKP_Data   = RedDKP_Data   or {}
+    RedDKP_Config = RedDKP_Config or {}
+    RedDKP_Audit  = RedDKP_Audit  or {}
+    RedDKP_Config.authorizedEditors = RedDKP_Config.authorizedEditors or {}
+end
+
 local function EnsurePlayer(name)
     EnsureSaved()
-    if not RedDKP_Data[name] then
-        RedDKP_Data[name] = {
-            rotated    = false,
-            lastWeek   = 0,
-            onTime     = 0,
-            attendance = 0,
-            bench      = 0,
-            spent      = 0,
-            balance    = 0,
-        }
-    end
+    RedDKP_Data[name] = RedDKP_Data[name] or {
+        rotated    = false,
+        lastWeek   = 0,
+        onTime     = 0,
+        attendance = 0,
+        bench      = 0,
+        spent      = 0,
+        balance    = 0,
+    }
     return RedDKP_Data[name]
 end
 
 --------------------------------------------------
--- MAIN WINDOW (CUSTOM FRAME)
+-- Forward declaration (will be replaced later)
 --------------------------------------------------
-
-local ROWS_VISIBLE = 12
-local sortedNames  = {}
-
-local mainFrame = CreateFrame("Frame", "RedDKPFrame", UIParent)
-mainFrame:SetSize(720, 380)
-mainFrame:SetPoint("CENTER")
-mainFrame:SetMovable(true)
-mainFrame:EnableMouse(true)
-mainFrame:RegisterForDrag("LeftButton")
-mainFrame:SetClampedToScreen(true)
-mainFrame:Hide()
-
-mainFrame:SetScript("OnDragStart", function(self) self:StartMoving() end)
-mainFrame:SetScript("OnDragStop",  function(self) self:StopMovingOrSizing() end)
-
--- Background
-local bg = mainFrame:CreateTexture(nil, "BACKGROUND")
-bg:SetAllPoints()
-bg:SetTexture("Interface\\ChatFrame\\ChatFrameBackground")
-bg:SetVertexColor(0, 0, 0, 0.85)
-
--- Border
-local border = CreateFrame("Frame", nil, mainFrame, "BackdropTemplate")
-border:SetPoint("TOPLEFT", -1, 1)
-border:SetPoint("BOTTOMRIGHT", 1, -1)
-border:SetBackdrop({
-    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-    edgeSize = 14,
-})
-border:SetBackdropBorderColor(0.8, 0.8, 0.8, 1)
-
--- Title bar
-local titleBar = mainFrame:CreateTexture(nil, "ARTWORK")
-titleBar:SetPoint("TOPLEFT", 4, -4)
-titleBar:SetPoint("TOPRIGHT", -4, -4)
-titleBar:SetHeight(24)
-titleBar:SetTexture("Interface\\ChatFrame\\ChatFrameBackground")
-titleBar:SetVertexColor(0.15, 0.15, 0.15, 1)
-
-local titleText = mainFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
-titleText:SetPoint("CENTER", titleBar, "CENTER", 0, -1)
-titleText:SetText("Redemptions DKP")
-
-local closeButton = CreateFrame("Button", nil, mainFrame, "UIPanelCloseButton")
-closeButton:SetPoint("TOPRIGHT", -4, -4)
-
---------------------------------------------------
--- TABS (DKP / OPTIONS / EXPORT)
---------------------------------------------------
-
-local tabs = {}
-local function CreateTab(index, text)
-    local tab = CreateFrame("Button", "RedDKPTab"..index, mainFrame, "CharacterFrameTabButtonTemplate")
-    tab:SetText(text)
-    PanelTemplates_TabResize(tab, 0)
-    if index == 1 then
-        tab:SetPoint("TOPLEFT", mainFrame, "BOTTOMLEFT", 5, 2)
-    else
-        tab:SetPoint("LEFT", tabs[index-1], "RIGHT", -15, 0)
-    end
-    tabs[index] = tab
-    return tab
-end
-
-local TAB_DKP    = 1
-local TAB_OPTIONS= 2
-local TAB_EXPORT = 3
-
-CreateTab(TAB_DKP,    "DKP")
-CreateTab(TAB_OPTIONS,"Editors / Options")
-CreateTab(TAB_EXPORT, "Export")
-
-local activeTab = TAB_DKP
-
-local function ShowTab(tab)
-    activeTab = tab
-    for i, t in ipairs(tabs) do
-        if i == tab then
-            PanelTemplates_SelectTab(t)
-        else
-            PanelTemplates_DeselectTab(t)
-        end
-    end
-end
-
---------------------------------------------------
--- PANELS
---------------------------------------------------
-
-local dkpPanel     = CreateFrame("Frame", nil, mainFrame)
-local optionsPanel = CreateFrame("Frame", nil, mainFrame)
-local exportPanel  = CreateFrame("Frame", nil, mainFrame)
-
-local function LayoutPanel(panel)
-    panel:SetPoint("TOPLEFT", mainFrame, "TOPLEFT", 10, -32)
-    panel:SetPoint("BOTTOMRIGHT", mainFrame, "BOTTOMRIGHT", -10, 10)
-end
-
-LayoutPanel(dkpPanel)
-LayoutPanel(optionsPanel)
-LayoutPanel(exportPanel)
-
-local function UpdatePanelVisibility()
-    dkpPanel:Hide()
-    optionsPanel:Hide()
-    exportPanel:Hide()
-
-    if activeTab == TAB_DKP then
-        dkpPanel:Show()
-    elseif activeTab == TAB_OPTIONS then
-        optionsPanel:Show()
-    elseif activeTab == TAB_EXPORT then
-        exportPanel:Show()
-    end
-end
-
-for i, tab in ipairs(tabs) do
-    tab:SetScript("OnClick", function()
-        ShowTab(i)
-        UpdatePanelVisibility()
-    end)
-end
-
-ShowTab(TAB_DKP)
-UpdatePanelVisibility()
-
---------------------------------------------------
--- DKP TABLE UI (IN DKP PANEL)
---------------------------------------------------
-
-local headers = {
-    { text = "Player",    width = 140 },
-    { text = "Rotated",   width = 70  },
-    { text = "LastWeek",  width = 80  },
-    { text = "OnTime",    width = 60  },
-    { text = "Attend",    width = 60  },
-    { text = "Bench",     width = 60  },
-    { text = "Spent",     width = 60  },
-    { text = "Balance",   width = 80  },
-}
-
-local fieldMap = {
-    [1] = "player",
-    [2] = "rotated",
-    [3] = "lastWeek",
-    [4] = "onTime",
-    [5] = "attendance",
-    [6] = "bench",
-    [7] = "spent",
-    [8] = "balance",
-}
-
-local headerFrame = CreateFrame("Frame", nil, dkpPanel)
-headerFrame:SetSize(660, 20)
-headerFrame:SetPoint("TOPLEFT", dkpPanel, "TOPLEFT", 20, -10)
-
-local headerButtons = {}
-do
-    local x = 0
-    for i, h in ipairs(headers) do
-        local btn = CreateFrame("Button", nil, headerFrame)
-        btn:SetPoint("LEFT", headerFrame, "LEFT", x, 0)
-        btn:SetSize(h.width, 20)
-
-        local fs = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        fs:SetPoint("LEFT", 0, 0)
-        fs:SetWidth(h.width)
-        fs:SetJustifyH("LEFT")
-        fs:SetText(h.text)
-
-        btn.text = fs
-        headerButtons[i] = btn
-
-        btn:SetScript("OnMouseDown", function()
-            local field = fieldMap[i]
-            if RedDKP_Config.sortField == field then
-                RedDKP_Config.sortAscending = not RedDKP_Config.sortAscending
-            else
-                RedDKP_Config.sortField = field
-                RedDKP_Config.sortAscending = true
-            end
-            UpdateTable()
-        end)
-
-        x = x + h.width
-    end
-end
-
-local scrollFrame = CreateFrame("ScrollFrame", "RedDKPScrollFrame", dkpPanel, "FauxScrollFrameTemplate")
-scrollFrame:SetPoint("TOPLEFT", headerFrame, "BOTTOMLEFT", 0, -5)
-scrollFrame:SetSize(660, 260)
-
-local rows = {}
-for i = 1, ROWS_VISIBLE do
-    local row = CreateFrame("Button", nil, dkpPanel)
-    row:SetSize(660, 18)
-
-    if i == 1 then
-        row:SetPoint("TOPLEFT", scrollFrame, "TOPLEFT", 0, 0)
-    else
-        row:SetPoint("TOPLEFT", rows[i-1], "BOTTOMLEFT", 0, -2)
-    end
-
-    row.cols = {}
-    local colX = 0
-
-    for j, h in ipairs(headers) do
-        local fs = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        fs:SetPoint("LEFT", row, "LEFT", colX, 0)
-        fs:SetWidth(h.width)
-        fs:SetJustifyH("LEFT")
-        row.cols[j] = fs
-        colX = colX + h.width
-    end
-
-    rows[i] = row
-end
-
-local function SortPlayers()
-    table.sort(sortedNames, function(a, b)
-        local field = RedDKP_Config.sortField
-        local asc   = RedDKP_Config.sortAscending
-
-        if field == "player" then
-            return asc and a < b or a > b
-        end
-
-        local da = RedDKP_Data[a][field] or 0
-        local db = RedDKP_Data[b][field] or 0
-
-        return asc and da < db or da > db
-    end)
-end
-
-local function RefreshSortedNames()
-    EnsureSaved()
-    wipe(sortedNames)
-    for name in pairs(RedDKP_Data) do
-        table.insert(sortedNames, name)
-    end
-    SortPlayers()
-end
 
 function UpdateTable()
+    -- real implementation is defined later in the UI section
+end
+
+--------------------------------------------------
+-- Audit core
+--------------------------------------------------
+
+local function AddAuditEntry(entry)
     EnsureSaved()
-    RefreshSortedNames()
+    entry.id     = entry.id     or NewAuditId()
+    entry.time   = entry.time   or Now()
+    entry.editor = entry.editor or UnitName("player")
+    entry.source = entry.source or entry.editor
 
-    local total = #sortedNames
-    FauxScrollFrame_Update(scrollFrame, total, ROWS_VISIBLE, 20)
+    table.insert(RedDKP_Audit, 1, entry)
 
-    local offset = FauxScrollFrame_GetOffset(scrollFrame)
-
-    for i = 1, ROWS_VISIBLE do
-        local index = i + offset
-        local row   = rows[i]
-
-        if index <= total then
-            local name = sortedNames[index]
-            local d    = RedDKP_Data[name]
-
-            row.cols[1]:SetText(name)
-            row.cols[2]:SetText(d.rotated and "Yes" or "")
-            row.cols[3]:SetText(d.lastWeek   or 0)
-            row.cols[4]:SetText(d.onTime     or 0)
-            row.cols[5]:SetText(d.attendance or 0)
-            row.cols[6]:SetText(d.bench      or 0)
-            row.cols[7]:SetText(d.spent      or 0)
-            row.cols[8]:SetText(d.balance    or 0)
-
-            row:Show()
-        else
-            row:Hide()
-        end
+    -- sync hook (implemented later)
+    if RedDKP_SendAuditEntry then
+        RedDKP_SendAuditEntry(entry)
     end
 end
 
-scrollFrame:SetScript("OnVerticalScroll", function(self, offset)
-    FauxScrollFrame_OnVerticalScroll(self, offset, 20, UpdateTable)
-end)
-
 --------------------------------------------------
--- SLASH COMMANDS (CORE)
+-- Audit logging helpers
 --------------------------------------------------
 
-local validFields = {
-    rotated    = true,
-    lastWeek   = true,
-    onTime     = true,
-    attendance = true,
-    bench      = true,
-    spent      = true,
-    balance    = true,
-}
+local function LogFieldChange(player, field, oldValue, newValue)
+    AddAuditEntry({
+        action = "field",
+        player = player,
+        field  = field,
+        old    = oldValue,
+        new    = newValue,
+    })
+end
 
-local function HandleSet(player, field, value)
-    if not IsAuthorized() then
-        Print("You are not authorized to modify data.")
-        return
-    end
+local function LogDeleteRow(player, data)
+    AddAuditEntry({
+        action = "delete",
+        player = player,
+        row = {
+            rotated    = data.rotated,
+            lastWeek   = data.lastWeek,
+            onTime     = data.onTime,
+            attendance = data.attendance,
+            bench      = data.bench,
+            spent      = data.spent,
+            balance    = data.balance,
+        },
+    })
+end
 
-    if not player or not field or not value then
-        Print("Usage: /reddkp set <player> <field> <value>")
-        return
-    end
+local function LogUndo(targetEntry, info)
+    AddAuditEntry({
+        action   = "undo",
+        targetId = targetEntry.id,
+        info     = info or "",
+    })
+end
 
-    field = string.lower(field)
+--------------------------------------------------
+-- Apply / revert helpers
+--------------------------------------------------
 
-    if not validFields[field] then
-        Print("Invalid field. Valid: rotated, lastWeek, onTime, attendance, bench, spent, balance")
-        return
-    end
+local function ApplyFieldChange(entry, reverse)
+    local p = entry.player
+    local f = entry.field
+    if not p or not f then return end
+    local d = RedDKP_Data[p]
+    if not d then return end
 
-    local data = EnsurePlayer(player)
+    local from = reverse and entry.new or entry.old
+    local to   = reverse and entry.old or entry.new
 
-    if field == "rotated" then
-        value = string.lower(value)
-        data.rotated = (value == "yes" or value == "true" or value == "1")
+    -- we don't strictly require matching "from", but you could enforce it
+    d[f] = to
+end
+
+local function ApplyDelete(entry, reverse)
+    local p = entry.player
+    if not p then return end
+
+    if reverse then
+        -- undo delete: restore row
+        local r = entry.row or {}
+        RedDKP_Data[p] = {
+            rotated    = r.rotated,
+            lastWeek   = r.lastWeek   or 0,
+            onTime     = r.onTime     or 0,
+            attendance = r.attendance or 0,
+            bench      = r.bench      or 0,
+            spent      = r.spent      or 0,
+            balance    = r.balance    or 0,
+        }
     else
-        local num = tonumber(value)
-        if not num then
-            Print("Value must be a number for field " .. field)
+        -- apply delete
+        RedDKP_Data[p] = nil
+    end
+end
+
+--------------------------------------------------
+-- Undo engine
+--------------------------------------------------
+
+local function UndoAuditEntry(entry)
+    if not IsAuthorized() then
+        Print("Only editors can undo audit actions.")
+        return
+    end
+
+    if not entry or not entry.action then
+        Print("Invalid audit entry.")
+        return
+    end
+
+    if entry.action == "field" then
+        ApplyFieldChange(entry, true)
+    elseif entry.action == "delete" then
+        ApplyDelete(entry, true)
+    else
+        Print("This audit entry type cannot be undone yet.")
+        return
+    end
+
+    UpdateTable()
+
+    local info = string.format("Undo of %s on %s", entry.action, entry.player or "?")
+    LogUndo(entry, info)
+
+    Print("Undid audit action " .. (entry.id or "?"))
+end
+
+RedDKP.UndoAuditEntry = UndoAuditEntry
+
+--------------------------------------------------
+-- Sync hooks (to be wired later)
+--------------------------------------------------
+
+function RedDKP_SendAuditEntry(entry)
+    -- placeholder: will be wired to SendAddonMessage later
+    -- e.g. serialize 'entry' and SendAddonMessage("REDDKP_AUDIT", payload, "GUILD")
+end
+
+function RedDKP_ReceiveAuditEntry(entry)
+    EnsureSaved()
+    if not entry or not entry.id then return end
+
+    -- avoid duplicates
+    for _, e in ipairs(RedDKP_Audit) do
+        if e.id == entry.id then
             return
         end
-        data[field] = num
     end
 
-    Print("Updated " .. player .. " " .. field .. " = " .. tostring(value))
+    -- mark source (your comm handler should set this too)
+    entry.source = entry.source or "remote"
+
+    -- insert into audit log (this will also re‑broadcast if we’re not careful,
+    -- so you may want a flag later to suppress re‑send on receive)
+    local oldSend = RedDKP_SendAuditEntry
+    RedDKP_SendAuditEntry = nil
+    AddAuditEntry(entry)
+    RedDKP_SendAuditEntry = oldSend
+
+    -- apply the action
+    if entry.action == "field" then
+        ApplyFieldChange(entry, false)
+    elseif entry.action == "delete" then
+        ApplyDelete(entry, false)
+    elseif entry.action == "undo" then
+        -- find target and apply reverse
+        for _, e in ipairs(RedDKP_Audit) do
+            if e.id == entry.targetId then
+                UndoAuditEntry(e)
+                break
+            end
+        end
+    end
+
     UpdateTable()
 end
 
-local function HandleEditorSlash(subcmd, name)
+--------------------------------------------------
+-- End of Part 1
+--------------------------------------------------
+
+--------------------------------------------------
+-- Part 2 — DKP Mutation Helpers
+--------------------------------------------------
+
+-- These helpers ensure ALL DKP changes are logged
+-- and therefore undoable + syncable.
+
+--------------------------------------------------
+-- Set a DKP field (with audit logging)
+--------------------------------------------------
+
+function RedDKP.SetDKPField(player, field, newValue)
     EnsureSaved()
-    if not IsAuthorized() then
-        Print("You are not authorized to change editor list.")
-        return
-    end
-    if not name or name == "" then
-        Print("Usage: /reddkp " .. subcmd .. " <CharacterName>")
-        return
+    local d = EnsurePlayer(player)
+    local oldValue = d[field]
+
+    if oldValue == newValue then
+        return -- no change
     end
 
-    if subcmd == "addeditor" then
-        RedDKP_Config.authorizedEditors[name] = true
-        Print("Added editor: " .. name)
-    elseif subcmd == "removeeditor" then
-        RedDKP_Config.authorizedEditors[name] = nil
-        Print("Removed editor: " .. name)
-    end
+    d[field] = newValue
+
+    -- audit entry
+    AddAuditEntry({
+        action = "field",
+        player = player,
+        field  = field,
+        old    = oldValue,
+        new    = newValue,
+    })
+
+    UpdateTable()
 end
 
-local function ListEditors()
+--------------------------------------------------
+-- Add to a DKP field (e.g. +5 attendance)
+--------------------------------------------------
+
+function RedDKP.AddDKP(player, field, amount)
     EnsureSaved()
-    Print("Authorized editors:")
-    for name in pairs(RedDKP_Config.authorizedEditors) do
-        Print(" - " .. name)
-    end
+    local d = EnsurePlayer(player)
+    local oldValue = d[field]
+    local newValue = oldValue + amount
+
+    d[field] = newValue
+
+    AddAuditEntry({
+        action = "field",
+        player = player,
+        field  = field,
+        old    = oldValue,
+        new    = newValue,
+    })
+
+    UpdateTable()
 end
 
-SLASH_REDDKP1 = "/reddkp"
-SLASH_REDDKP2 = "/redDKP"
+--------------------------------------------------
+-- Delete a DKP row (with audit logging)
+--------------------------------------------------
 
-SlashCmdList["REDDKP"] = function(msg)
+function RedDKP.DeletePlayerRow(player)
     EnsureSaved()
-    msg = msg or ""
-    local cmd, rest = msg:match("^(%S*)%s*(.-)$")
-    cmd = string.lower(cmd or "")
 
-    if cmd == "" or cmd == "show" then
-        if mainFrame:IsShown() then
-            mainFrame:Hide()
-        else
-            ShowTab(TAB_DKP)
-            UpdatePanelVisibility()
-            UpdateTable()
-            mainFrame:Show()
+    local d = RedDKP_Data[player]
+    if not d then
+        Print("No DKP row exists for " .. player)
+        return
+    end
+
+    -- log full row before deletion
+    AddAuditEntry({
+        action = "delete",
+        player = player,
+        row = {
+            rotated    = d.rotated,
+            lastWeek   = d.lastWeek,
+            onTime     = d.onTime,
+            attendance = d.attendance,
+            bench      = d.bench,
+            spent      = d.spent,
+            balance    = d.balance,
+        },
+    })
+
+    -- delete the row
+    RedDKP_Data[player] = nil
+
+    UpdateTable()
+    Print("Deleted DKP record for " .. player)
+end
+
+--------------------------------------------------
+-- Delete confirmation popup
+--------------------------------------------------
+
+StaticPopupDialogs["REDDKP_DELETE_PLAYER"] = {
+    text = "Delete DKP record for %s?",
+    button1 = "Delete",
+    button2 = "Cancel",
+    OnAccept = function(self, player)
+        if not IsAuthorized() then
+            Print("Only editors can delete DKP rows.")
+            return
         end
-        return
-    end
+        RedDKP.DeletePlayerRow(player)
+    end,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+}
 
-    if cmd == "set" then
-        local player, field, value = rest:match("^(%S+)%s+(%S+)%s+(.+)$")
-        HandleSet(player, field, value)
-        return
-    end
+--------------------------------------------------
+-- Helper for UI to request deletion
+--------------------------------------------------
 
-    if cmd == "addeditor" or cmd == "removeeditor" then
-        local name = rest:match("^(%S+)$")
-        HandleEditorSlash(cmd, name)
-        return
-    end
-
-    if cmd == "listeditors" then
-        ListEditors()
-        return
-    end
-
-    Print("Commands:")
-    Print("/redDKP or /reddkp show - toggle DKP window")
-    Print("/reddkp set <player> <field> <value>")
-    Print("   fields: rotated, lastWeek, onTime, attendance, bench, spent, balance")
-    Print("/reddkp addeditor <name>")
-    Print("/reddkp removeeditor <name>")
-    Print("/reddkp listeditors")
+function RedDKP.RequestDeletePlayer(player)
+    StaticPopup_Show("REDDKP_DELETE_PLAYER", player, nil, player)
 end
 
 --------------------------------------------------
--- INIT
+-- End of Part 2
 --------------------------------------------------
 
-local initFrame = CreateFrame("Frame")
-initFrame:RegisterEvent("ADDON_LOADED")
-initFrame:SetScript("OnEvent", function(self, event, addon)
-    if addon == ADDON_NAME then
-        EnsureSaved()
+--------------------------------------------------
+-- Part 3 — DKP Table UI
+--------------------------------------------------
+
+local mainFrame
+local dkpPanel
+local dkpRows = {}
+local selectedPlayer = nil
+
+--------------------------------------------------
+-- Create main addon frame (tabs added later)
+--------------------------------------------------
+
+mainFrame = CreateFrame("Frame", "RedDKP_MainFrame", UIParent, "BasicFrameTemplateWithInset")
+mainFrame:SetSize(900, 600)
+mainFrame:SetPoint("CENTER")
+mainFrame:Hide()
+
+mainFrame.title = mainFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
+mainFrame.title:SetPoint("TOP", 0, -10)
+mainFrame.title:SetText("RedDKP")
+
+--------------------------------------------------
+-- DKP Panel (Tab 1)
+--------------------------------------------------
+
+dkpPanel = CreateFrame("Frame", nil, mainFrame)
+dkpPanel:SetAllPoints()
+dkpPanel:Hide()
+
+--------------------------------------------------
+-- ScrollFrame for DKP table
+--------------------------------------------------
+
+local scroll = CreateFrame("ScrollFrame", nil, dkpPanel, "UIPanelScrollFrameTemplate")
+scroll:SetPoint("TOPLEFT", 10, -40)
+scroll:SetPoint("BOTTOMRIGHT", -30, 50)
+
+local content = CreateFrame("Frame", nil, scroll)
+content:SetSize(1, 1)
+scroll:SetScrollChild(content)
+
+--------------------------------------------------
+-- Column headers
+--------------------------------------------------
+
+local headers = {
+    { name = "Player",     width = 140 },
+    { name = "Rot",        width = 40  },
+    { name = "LW",         width = 40  },
+    { name = "OT",         width = 40  },
+    { name = "AT",         width = 40  },
+    { name = "Bench",      width = 50  },
+    { name = "Spent",      width = 60  },
+    { name = "Balance",    width = 60  },
+}
+
+local x = 10
+for _, h in ipairs(headers) do
+    local fs = dkpPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    fs:SetPoint("TOPLEFT", x, -15)
+    fs:SetText(h.name)
+    x = x + h.width + 10
+end
+
+--------------------------------------------------
+-- Row creation
+--------------------------------------------------
+
+local function CreateDKPRow(parent, index)
+    local row = CreateFrame("Button", nil, parent)
+    row:SetSize(800, 20)
+    row:SetPoint("TOPLEFT", 0, -(index - 1) * 22)
+
+    row.bg = row:CreateTexture(nil, "BACKGROUND")
+    row.bg:SetAllPoints()
+    row.bg:SetColorTexture(0, 0, 0, 0.2)
+    row.bg:Hide()
+
+    local cols = {}
+    local x = 0
+
+    for i, h in ipairs(headers) do
+        local fs = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        fs:SetPoint("LEFT", x, 0)
+        fs:SetWidth(h.width)
+        fs:SetJustifyH("LEFT")
+        cols[i] = fs
+        x = x + h.width + 10
+    end
+
+    row.cols = cols
+
+    row:SetScript("OnClick", function(self)
+        selectedPlayer = self.player
+        for _, r in ipairs(dkpRows) do
+            r.bg:Hide()
+        end
+        self.bg:Show()
+    end)
+
+    return row
+end
+
+--------------------------------------------------
+-- UpdateTable() — refresh DKP table
+--------------------------------------------------
+
+function UpdateTable()
+    EnsureSaved()
+
+    for _, r in ipairs(dkpRows) do
+        r:Hide()
+    end
+    wipe(dkpRows)
+
+    local names = {}
+    for name in pairs(RedDKP_Data) do
+        table.insert(names, name)
+    end
+    table.sort(names)
+
+    local y = 0
+    for i, name in ipairs(names) do
+        local d = RedDKP_Data[name]
+        local row = CreateDKPRow(content, i)
+        row.player = name
+
+        row.cols[1]:SetText(name)
+        row.cols[2]:SetText(d.rotated and "Y" or "N")
+        row.cols[3]:SetText(d.lastWeek)
+        row.cols[4]:SetText(d.onTime)
+        row.cols[5]:SetText(d.attendance)
+        row.cols[6]:SetText(d.bench)
+        row.cols[7]:SetText(d.spent)
+        row.cols[8]:SetText(d.balance)
+
+        row:Show()
+        dkpRows[i] = row
+        y = y + 22
+    end
+
+    content:SetHeight(y)
+end
+
+--------------------------------------------------
+-- Edit box for modifying fields
+--------------------------------------------------
+
+local editBox = CreateFrame("EditBox", nil, dkpPanel, "InputBoxTemplate")
+editBox:SetSize(120, 25)
+editBox:SetPoint("BOTTOMLEFT", 10, 10)
+editBox:SetAutoFocus(false)
+editBox:Hide()
+
+local fieldDropdown = CreateFrame("Frame", "RedDKP_FieldDropdown", dkpPanel, "UIDropDownMenuTemplate")
+fieldDropdown:SetPoint("LEFT", editBox, "RIGHT", 10, 0)
+
+local fields = {
+    { text = "lastWeek",   value = "lastWeek" },
+    { text = "onTime",     value = "onTime" },
+    { text = "attendance", value = "attendance" },
+    { text = "bench",      value = "bench" },
+    { text = "spent",      value = "spent" },
+    { text = "balance",    value = "balance" },
+}
+
+local selectedField = "lastWeek"
+
+UIDropDownMenu_Initialize(fieldDropdown, function(self, level)
+    for _, f in ipairs(fields) do
+        local info = UIDropDownMenu_CreateInfo()
+        info.text = f.text
+        info.value = f.value
+        info.func = function()
+            selectedField = f.value
+            UIDropDownMenu_SetText(fieldDropdown, f.text)
+        end
+        UIDropDownMenu_AddButton(info)
     end
 end)
 
---------------------------------------------------
--- OPTIONS PANEL (INSIDE MAIN WINDOW)
---------------------------------------------------
-
-local optTitle = optionsPanel:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
-optTitle:SetPoint("TOPLEFT", 10, -10)
-optTitle:SetText("RedDKP Editors & Sort Options")
-
-local subtitle = optionsPanel:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
-subtitle:SetPoint("TOPLEFT", optTitle, "BOTTOMLEFT", 0, -4)
-subtitle:SetText("Manage who can edit DKP and how the table is sorted by default.")
+UIDropDownMenu_SetText(fieldDropdown, "lastWeek")
 
 --------------------------------------------------
--- EDITOR LIST BACKGROUND
+-- Apply edit button
 --------------------------------------------------
 
-local listBG = CreateFrame("Frame", nil, optionsPanel)
-listBG:SetPoint("TOPLEFT", subtitle, "BOTTOMLEFT", 0, -20)
-listBG:SetSize(260, 200)
+local applyBtn = CreateFrame("Button", nil, dkpPanel, "UIPanelButtonTemplate")
+applyBtn:SetSize(80, 25)
+applyBtn:SetPoint("LEFT", fieldDropdown, "RIGHT", 10, 0)
+applyBtn:SetText("Apply")
 
-local listBGTex = listBG:CreateTexture(nil, "BACKGROUND")
-listBGTex:SetAllPoints()
-listBGTex:SetTexture("Interface\\ChatFrame\\ChatFrameBackground")
-listBGTex:SetVertexColor(0, 0, 0, 0.4)
-
-local function CreateBorderPiece(parent)
-    local t = parent:CreateTexture(nil, "BORDER")
-    t:SetTexture("Interface\\Tooltips\\UI-Tooltip-Border")
-    return t
-end
-
-local border2 = {}
-border2.top = CreateBorderPiece(listBG)
-border2.top:SetPoint("TOPLEFT", -4, 4)
-border2.top:SetPoint("TOPRIGHT", 4, 4)
-border2.top:SetHeight(8)
-
-border2.bottom = CreateBorderPiece(listBG)
-border2.bottom:SetPoint("BOTTOMLEFT", -4, -4)
-border2.bottom:SetPoint("BOTTOMRIGHT", 4, -4)
-border2.bottom:SetHeight(8)
-
-border2.left = CreateBorderPiece(listBG)
-border2.left:SetPoint("TOPLEFT", -4, 4)
-border2.left:SetPoint("BOTTOMLEFT", -4, -4)
-border2.left:SetWidth(8)
-
-border2.right = CreateBorderPiece(listBG)
-border2.right:SetPoint("TOPRIGHT", 4, 4)
-border2.right:SetPoint("BOTTOMRIGHT", 4, -4)
-border2.right:SetWidth(8)
-
---------------------------------------------------
--- EDITOR LIST SCROLL FRAME
---------------------------------------------------
-
-local scroll = CreateFrame("ScrollFrame", "RedDKPEditorsScroll", listBG, "FauxScrollFrameTemplate")
-scroll:SetPoint("TOPLEFT", 0, -4)
-scroll:SetPoint("BOTTOMRIGHT", -26, 4)
-
-local editorRows = {}
-local EDITOR_ROWS = 10
-
-for i = 1, EDITOR_ROWS do
-    local row = CreateFrame("Button", nil, listBG)
-    row:SetSize(230, 18)
-
-    if i == 1 then
-        row:SetPoint("TOPLEFT", listBG, "TOPLEFT", 6, -6)
-    else
-        row:SetPoint("TOPLEFT", editorRows[i-1], "BOTTOMLEFT", 0, -2)
+applyBtn:SetScript("OnClick", function()
+    if not selectedPlayer then
+        Print("No player selected.")
+        return
+    end
+    if not IsAuthorized() then
+        Print("Only editors can modify DKP.")
+        return
     end
 
-    row.text = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    row.text:SetPoint("LEFT", 4, 0)
+    local val = tonumber(editBox:GetText())
+    if not val then
+        Print("Enter a number.")
+        return
+    end
 
-    row:SetScript("OnClick", function(self)
-        for _, r in ipairs(editorRows) do
-            r.text:SetTextColor(1, 1, 1)
+    RedDKP.SetDKPField(selectedPlayer, selectedField, val)
+    editBox:SetText("")
+end)
+
+--------------------------------------------------
+-- Delete button
+--------------------------------------------------
+
+local deleteBtn = CreateFrame("Button", nil, dkpPanel, "UIPanelButtonTemplate")
+deleteBtn:SetSize(80, 25)
+deleteBtn:SetPoint("LEFT", applyBtn, "RIGHT", 10, 0)
+deleteBtn:SetText("Delete")
+
+deleteBtn:SetScript("OnClick", function()
+    if not selectedPlayer then
+        Print("No player selected.")
+        return
+    end
+    RedDKP.RequestDeletePlayer(selectedPlayer)
+end)
+
+--------------------------------------------------
+-- End of Part 3
+--------------------------------------------------
+
+--------------------------------------------------
+-- Part 4 — Tabs, Editors Tab, Import/Export Tab
+--------------------------------------------------
+
+--------------------------------------------------
+-- Tab Buttons
+--------------------------------------------------
+
+local tabs = {}
+local function CreateTab(id, text)
+    local tab = CreateFrame("Button", nil, mainFrame, "OptionsFrameTabButtonTemplate")
+    tab:SetID(id)
+    tab:SetText(text)
+    tab:SetScript("OnClick", function(self)
+        PanelTemplates_SetTab(mainFrame, self:GetID())
+        dkpPanel:Hide()
+        editorsPanel:Hide()
+        importPanel:Hide()
+
+        if self:GetID() == 1 then dkpPanel:Show()
+        elseif self:GetID() == 2 then editorsPanel:Show()
+        elseif self:GetID() == 3 then importPanel:Show()
         end
-        self.text:SetTextColor(1, 0.82, 0)
-        optionsPanel.selectedEditor = self.text:GetText()
     end)
-
-    editorRows[i] = row
+    return tab
 end
+
+tabs[1] = CreateTab(1, "DKP")
+tabs[2] = CreateTab(2, "Editors")
+tabs[3] = CreateTab(3, "Import/Export")
+
+tabs[1]:SetPoint("TOPLEFT", mainFrame, "BOTTOMLEFT", 10, 7)
+tabs[2]:SetPoint("LEFT", tabs[1], "RIGHT", 10, 0)
+tabs[3]:SetPoint("LEFT", tabs[2], "RIGHT", 10, 0)
+
+PanelTemplates_SetNumTabs(mainFrame, 3)
+PanelTemplates_SetTab(mainFrame, 1)
+
+--------------------------------------------------
+-- Editors Panel (Tab 2)
+--------------------------------------------------
+
+editorsPanel = CreateFrame("Frame", nil, mainFrame)
+editorsPanel:SetAllPoints()
+editorsPanel:Hide()
+
+local title = editorsPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
+title:SetPoint("TOPLEFT", 10, -10)
+title:SetText("Authorized Editors")
+
+--------------------------------------------------
+-- Scrollable list of editors
+--------------------------------------------------
+
+local editorScroll = CreateFrame("ScrollFrame", nil, editorsPanel, "UIPanelScrollFrameTemplate")
+editorScroll:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -10)
+editorScroll:SetSize(200, 350)
+
+local editorListFrame = CreateFrame("Frame", nil, editorScroll)
+editorListFrame:SetSize(200, 1)
+editorScroll:SetScrollChild(editorListFrame)
+
+editorsPanel.editorRows = {}
+editorsPanel.selectedEditor = nil
 
 local function RefreshEditorList()
     EnsureSaved()
-    local editors = {}
 
+    for _, row in ipairs(editorsPanel.editorRows) do
+        row:Hide()
+    end
+    wipe(editorsPanel.editorRows)
+
+    local names = {}
     for name in pairs(RedDKP_Config.authorizedEditors) do
-        table.insert(editors, name)
+        table.insert(names, name)
     end
-    table.sort(editors)
+    table.sort(names)
 
-    optionsPanel.editorList = editors
+    local y = 0
+    for i, name in ipairs(names) do
+        local row = CreateFrame("Button", nil, editorListFrame)
+        row:SetPoint("TOPLEFT", 0, -y)
+        row:SetSize(200, 18)
 
-    FauxScrollFrame_Update(scroll, #editors, EDITOR_ROWS, 18)
-    local offset = FauxScrollFrame_GetOffset(scroll)
+        local fs = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        fs:SetPoint("LEFT", 2, 0)
+        fs:SetText(name)
+        row.text = fs
 
-    for i = 1, EDITOR_ROWS do
-        local index = i + offset
-        local row   = editorRows[i]
+        row:SetScript("OnClick", function()
+            editorsPanel.selectedEditor = name
+            for _, r in ipairs(editorsPanel.editorRows) do
+                r.text:SetTextColor(1, 1, 1)
+            end
+            row.text:SetTextColor(0, 0.6, 1)
+        end)
 
-        if editors[index] then
-            row.text:SetText(editors[index])
-            row:Show()
-        else
-            row.text:SetText("")
-            row:Hide()
-        end
+        table.insert(editorsPanel.editorRows, row)
+        y = y + 18
     end
+
+    editorListFrame:SetHeight(y)
 end
 
-scroll:SetScript("OnVerticalScroll", function(self, offset)
-    FauxScrollFrame_OnVerticalScroll(self, offset, 18, RefreshEditorList)
-end)
+editorsPanel.RefreshEditorList = RefreshEditorList
 
 --------------------------------------------------
--- ADD / REMOVE EDITOR
+-- Add editor controls
 --------------------------------------------------
 
-local addBox = CreateFrame("EditBox", nil, optionsPanel, "InputBoxTemplate")
-addBox:SetSize(160, 28)
-addBox:SetPoint("TOPLEFT", listBG, "TOPRIGHT", 20, -10)
+local addBox = CreateFrame("EditBox", nil, editorsPanel, "InputBoxTemplate")
+addBox:SetSize(150, 25)
+addBox:SetPoint("TOPLEFT", editorScroll, "TOPRIGHT", 20, 0)
 addBox:SetAutoFocus(false)
 
-local addLabel = optionsPanel:CreateFontString(nil, "ARTWORK", "GameFontNormal")
-addLabel:SetPoint("BOTTOMLEFT", addBox, "TOPLEFT", 0, 4)
-addLabel:SetText("Add Editor")
+local addBtn = CreateFrame("Button", nil, editorsPanel, "UIPanelButtonTemplate")
+addBtn:SetSize(80, 25)
+addBtn:SetPoint("LEFT", addBox, "RIGHT", 10, 0)
+addBtn:SetText("Add")
 
-local addButton = CreateFrame("Button", nil, optionsPanel, "UIPanelButtonTemplate")
-addButton:SetSize(80, 24)
-addButton:SetPoint("LEFT", addBox, "RIGHT", 10, 0)
-addButton:SetText("Add")
+addBtn:SetScript("OnClick", function()
+    if not IsGuildOfficer() then
+        Print("Only officers can modify editors.")
+        return
+    end
 
-addButton:SetScript("OnClick", function()
     local name = addBox:GetText():gsub("%s+", "")
     if name == "" then return end
 
@@ -614,534 +759,618 @@ addButton:SetScript("OnClick", function()
     RefreshEditorList()
 end)
 
-local removeButton = CreateFrame("Button", nil, optionsPanel, "UIPanelButtonTemplate")
-removeButton:SetSize(120, 24)
-removeButton:SetPoint("TOPLEFT", addBox, "BOTTOMLEFT", 0, -20)
-removeButton:SetText("Remove Selected")
+--------------------------------------------------
+-- Remove editor button
+--------------------------------------------------
 
-removeButton:SetScript("OnClick", function()
-    local name = optionsPanel.selectedEditor
+local removeBtn = CreateFrame("Button", nil, editorsPanel, "UIPanelButtonTemplate")
+removeBtn:SetSize(80, 25)
+removeBtn:SetPoint("TOPLEFT", addBox, "BOTTOMLEFT", 0, -10)
+removeBtn:SetText("Remove")
+
+removeBtn:SetScript("OnClick", function()
+    if not IsGuildOfficer() then
+        Print("Only officers can modify editors.")
+        return
+    end
+
+    local name = editorsPanel.selectedEditor
     if not name then return end
 
     EnsureSaved()
     RedDKP_Config.authorizedEditors[name] = nil
-    optionsPanel.selectedEditor = nil
+    editorsPanel.selectedEditor = nil
     RefreshEditorList()
 end)
 
 --------------------------------------------------
--- SORT OPTIONS
+-- Show/hide controls based on permissions
 --------------------------------------------------
 
-local sortLabel = optionsPanel:CreateFontString(nil, "ARTWORK", "GameFontNormal")
-sortLabel:SetPoint("TOPLEFT", removeButton, "BOTTOMLEFT", 0, -30)
-sortLabel:SetText("Default Sort Column")
-
-local sortDropdown = CreateFrame("Frame", "RedDKPSortDropdown", optionsPanel, "UIDropDownMenuTemplate")
-sortDropdown:SetPoint("TOPLEFT", sortLabel, "BOTTOMLEFT", -15, -5)
-
-local sortFields = {
-    { text = "Player",     value = "player" },
-    { text = "Rotated",    value = "rotated" },
-    { text = "Last Week",  value = "lastWeek" },
-    { text = "On Time",    value = "onTime" },
-    { text = "Attendance", value = "attendance" },
-    { text = "Bench",      value = "bench" },
-    { text = "Spent",      value = "spent" },
-    { text = "Balance",    value = "balance" },
-}
-
-local function SortDropdown_OnClick(self)
-    RedDKP_Config.sortField = self.value
-    UIDropDownMenu_SetSelectedValue(sortDropdown, self.value)
-    UpdateTable()
-end
-
-UIDropDownMenu_Initialize(sortDropdown, function(self, level)
-    for _, info in ipairs(sortFields) do
-        local item = UIDropDownMenu_CreateInfo()
-        item.text  = info.text
-        item.value = info.value
-        item.func  = SortDropdown_OnClick
-        UIDropDownMenu_AddButton(item)
-    end
-end)
-
-local ascCheck = CreateFrame("CheckButton", nil, optionsPanel, "UICheckButtonTemplate")
-ascCheck:SetPoint("LEFT", sortDropdown, "RIGHT", 40, 0)
-ascCheck.text:SetText("Ascending")
-
-ascCheck:SetScript("OnClick", function(self)
-    RedDKP_Config.sortAscending = self:GetChecked()
-    UpdateTable()
-end)
-
-optionsPanel:SetScript("OnShow", function()
+editorsPanel:SetScript("OnShow", function()
     RefreshEditorList()
-    UIDropDownMenu_SetSelectedValue(sortDropdown, RedDKP_Config.sortField)
-    ascCheck:SetChecked(RedDKP_Config.sortAscending)
-end)
 
---------------------------------------------------
--- EXPORT PANEL (CSV / JSON / XML)
---------------------------------------------------
-
-local exportTitle = exportPanel:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
-exportTitle:SetPoint("TOPLEFT", 10, -10)
-exportTitle:SetText("Export DKP Data")
-
-local exportDesc = exportPanel:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
-exportDesc:SetPoint("TOPLEFT", exportTitle, "BOTTOMLEFT", 0, -4)
-exportDesc:SetText("Copy and paste this data into external tools or spreadsheets.")
-
-local formatLabel = exportPanel:CreateFontString(nil, "ARTWORK", "GameFontNormal")
-formatLabel:SetPoint("TOPLEFT", exportDesc, "BOTTOMLEFT", 0, -10)
-formatLabel:SetText("Format")
-
-local formatDropdown = CreateFrame("Frame", "RedDKPExportFormatDropdown", exportPanel, "UIDropDownMenuTemplate")
-formatDropdown:SetPoint("TOPLEFT", formatLabel, "BOTTOMLEFT", -15, -5)
-
-local EXPORT_FORMATS = {
-    { text = "CSV",  value = "csv"  },
-    { text = "JSON", value = "json" },
-    { text = "XML",  value = "xml"  },
-}
-
-local currentExportFormat = "csv"
-
-local function GenerateCSV()
-    EnsureSaved()
-    local lines = {}
-    table.insert(lines, "Player,Rotated,LastWeek,OnTime,Attendance,Bench,Spent,Balance")
-
-    for name, d in pairs(RedDKP_Data) do
-        table.insert(lines,
-            string.format("%s,%s,%d,%d,%d,%d,%d,%d",
-                name,
-                d.rotated and "Yes" or "No",
-                d.lastWeek   or 0,
-                d.onTime     or 0,
-                d.attendance or 0,
-                d.bench      or 0,
-                d.spent      or 0,
-                d.balance    or 0
-            )
-        )
-    end
-
-    return table.concat(lines, "\n")
-end
-
-local function GenerateJSON()
-    EnsureSaved()
-    local parts = {}
-    table.insert(parts, "{")
-
-    local first = true
-    for name, d in pairs(RedDKP_Data) do
-        if not first then
-            table.insert(parts, ",")
-        end
-        first = false
-
-        table.insert(parts, string.format(
-            "\"%s\":{\"rotated\":%s,\"lastWeek\":%d,\"onTime\":%d,\"attendance\":%d,\"bench\":%d,\"spent\":%d,\"balance\":%d}",
-            name,
-            d.rotated and "true" or "false",
-            d.lastWeek   or 0,
-            d.onTime     or 0,
-            d.attendance or 0,
-            d.bench      or 0,
-            d.spent      or 0,
-            d.balance    or 0
-        ))
-    end
-
-    table.insert(parts, "}")
-    return table.concat(parts, "")
-end
-
-local function GenerateXML()
-    EnsureSaved()
-    local lines = {}
-    table.insert(lines, "<RedDKP>")
-
-    for name, d in pairs(RedDKP_Data) do
-        table.insert(lines, string.format(
-            "  <Player name=\"%s\" rotated=\"%s\" lastWeek=\"%d\" onTime=\"%d\" attendance=\"%d\" bench=\"%d\" spent=\"%d\" balance=\"%d\" />",
-            name,
-            d.rotated and "true" or "false",
-            d.lastWeek   or 0,
-            d.onTime     or 0,
-            d.attendance or 0,
-            d.bench      or 0,
-            d.spent      or 0,
-            d.balance    or 0
-        ))
-    end
-
-    table.insert(lines, "</RedDKP>")
-    return table.concat(lines, "\n")
-end
-
-local exportScroll = CreateFrame("ScrollFrame", "RedDKPExportScroll", exportPanel, "UIPanelScrollFrameTemplate")
-exportScroll:SetPoint("TOPLEFT", formatDropdown, "BOTTOMLEFT", 16, -10)
-exportScroll:SetPoint("BOTTOMRIGHT", -30, 10)
-
-local exportEditBox = CreateFrame("EditBox", nil, exportScroll)
-exportEditBox:SetMultiLine(true)
-exportEditBox:SetFontObject(ChatFontNormal)
-exportEditBox:SetWidth(640)
-exportEditBox:SetAutoFocus(false)
-exportScroll:SetScrollChild(exportEditBox)
-
-local function RefreshExportText()
-    local text
-    if currentExportFormat == "csv" then
-        text = GenerateCSV()
-    elseif currentExportFormat == "json" then
-        text = GenerateJSON()
-    elseif currentExportFormat == "xml" then
-        text = GenerateXML()
-    end
-    exportEditBox:SetText(text or "")
-    exportEditBox:HighlightText()
-end
-
-local function ExportFormat_OnClick(self)
-    currentExportFormat = self.value
-    UIDropDownMenu_SetSelectedValue(formatDropdown, self.value)
-    RefreshExportText()
-end
-
-UIDropDownMenu_Initialize(formatDropdown, function(self, level)
-    for _, info in ipairs(EXPORT_FORMATS) do
-        local item = UIDropDownMenu_CreateInfo()
-        item.text  = info.text
-        item.value = info.value
-        item.func  = ExportFormat_OnClick
-        UIDropDownMenu_AddButton(item)
+    if not IsGuildOfficer() then
+        addBox:Hide()
+        addBtn:Hide()
+        removeBtn:Hide()
+    else
+        addBox:Show()
+        addBtn:Show()
+        removeBtn:Show()
     end
 end)
 
-exportPanel:SetScript("OnShow", function()
-    UIDropDownMenu_SetSelectedValue(formatDropdown, currentExportFormat)
-    RefreshExportText()
+--------------------------------------------------
+-- Import/Export Panel (Tab 3)
+--------------------------------------------------
+
+importPanel = CreateFrame("Frame", nil, mainFrame)
+importPanel:SetAllPoints()
+importPanel:Hide()
+
+local ieTitle = importPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
+ieTitle:SetPoint("TOPLEFT", 10, -10)
+ieTitle:SetText("Import / Export")
+
+--------------------------------------------------
+-- Export box
+--------------------------------------------------
+
+local exportBox = CreateFrame("ScrollFrame", nil, importPanel, "UIPanelScrollFrameTemplate")
+exportBox:SetPoint("TOPLEFT", 10, -50)
+exportBox:SetSize(400, 400)
+
+local exportEdit = CreateFrame("EditBox", nil, exportBox)
+exportEdit:SetMultiLine(true)
+exportEdit:SetFontObject(ChatFontNormal)
+exportEdit:SetWidth(380)
+exportEdit:SetAutoFocus(false)
+exportBox:SetScrollChild(exportEdit)
+
+local exportBtn = CreateFrame("Button", nil, importPanel, "UIPanelButtonTemplate")
+exportBtn:SetSize(120, 25)
+exportBtn:SetPoint("TOPLEFT", exportBox, "BOTTOMLEFT", 0, -10)
+exportBtn:SetText("Export Data")
+
+exportBtn:SetScript("OnClick", function()
+    EnsureSaved()
+
+    local payload = {
+        dkp   = RedDKP_Data,
+        audit = RedDKP_Audit,
+    }
+
+    exportEdit:SetText(SerializeTable(payload))
+    Print("Exported DKP + audit log.")
 end)
 
 --------------------------------------------------
--- GUILD SYNC SYSTEM (CLEANED)
+-- Import box
 --------------------------------------------------
 
-local SYNC_PREFIX = "REDDKP_SYNC"
-local CHUNK_SIZE  = 220
+local importBox = CreateFrame("ScrollFrame", nil, importPanel, "UIPanelScrollFrameTemplate")
+importBox:SetPoint("TOPLEFT", exportBox, "TOPRIGHT", 20, 0)
+importBox:SetSize(400, 400)
 
-local function SerializeTable(tbl)
-    local out = {}
+local importEdit = CreateFrame("EditBox", nil, importBox)
+importEdit:SetMultiLine(true)
+importEdit:SetFontObject(ChatFontNormal)
+importEdit:SetWidth(380)
+importEdit:SetAutoFocus(false)
+importBox:SetScrollChild(importEdit)
 
-    for name, d in pairs(tbl) do
-        table.insert(out,
-            name .. ";" ..
-            (d.rotated and "1" or "0") .. ";" ..
-            (d.lastWeek   or 0) .. ";" ..
-            (d.onTime     or 0) .. ";" ..
-            (d.attendance or 0) .. ";" ..
-            (d.bench      or 0) .. ";" ..
-            (d.spent      or 0) .. ";" ..
-            (d.balance    or 0)
-        )
-    end
+local importBtn = CreateFrame("Button", nil, importPanel, "UIPanelButtonTemplate")
+importBtn:SetSize(120, 25)
+importBtn:SetPoint("TOPLEFT", importBox, "BOTTOMLEFT", 0, -10)
+importBtn:SetText("Import Data")
 
-    return table.concat(out, "|")
-end
-
-local function DeserializeTable(str)
-    local result = {}
-
-    for entry in string.gmatch(str, "([^|]+)") do
-        local name, rot, lw, ot, att, bench, spent, bal =
-            string.match(entry, "([^;]+);([^;]+);([^;]+);([^;]+);([^;]+);([^;]+);([^;]+);([^;]+)")
-
-        if name then
-            result[name] = {
-                rotated    = rot == "1",
-                lastWeek   = tonumber(lw)   or 0,
-                onTime     = tonumber(ot)   or 0,
-                attendance = tonumber(att)  or 0,
-                bench      = tonumber(bench)or 0,
-                spent      = tonumber(spent)or 0,
-                balance    = tonumber(bal)  or 0,
-            }
-        end
-    end
-
-    return result
-end
-
-local function SendChunked(prefix, msg, channel)
-    local total = math.ceil(#msg / CHUNK_SIZE)
-
-    for i = 1, total do
-        local chunk = string.sub(msg, (i - 1) * CHUNK_SIZE + 1, i * CHUNK_SIZE)
-        SendAddonMessage(prefix, i .. "/" .. total .. ":" .. chunk, channel)
-    end
-end
-
-local function BroadcastDKP()
+importBtn:SetScript("OnClick", function()
     if not IsAuthorized() then
-        Print("You are not authorized to broadcast DKP data.")
+        Print("Only editors can import data.")
         return
     end
 
+    local text = importEdit:GetText()
+    if text == "" then return end
+
+    local ok, data = DeserializeTable(text)
+    if not ok then
+        Print("Import failed: invalid data.")
+        return
+    end
+
+    -- Merge DKP
+    for name, row in pairs(data.dkp or {}) do
+        RedDKP_Data[name] = row
+    end
+
+    -- Merge audit log
+    for _, entry in ipairs(data.audit or {}) do
+        RedDKP_ReceiveAuditEntry(entry)
+    end
+
+    UpdateTable()
+    Print("Import complete.")
+end)
+
+--------------------------------------------------
+-- End of Part 4
+--------------------------------------------------
+
+--------------------------------------------------
+-- Part 5 — Audit Log Tab (with Undo hyperlink)
+--------------------------------------------------
+
+auditPanel = CreateFrame("Frame", nil, mainFrame)
+auditPanel:SetAllPoints()
+auditPanel:Hide()
+
+local auditTitle = auditPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
+auditTitle:SetPoint("TOPLEFT", 10, -10)
+auditTitle:SetText("Audit Log")
+
+--------------------------------------------------
+-- ScrollFrame for audit log
+--------------------------------------------------
+
+local auditScroll = CreateFrame("ScrollFrame", nil, auditPanel, "UIPanelScrollFrameTemplate")
+auditScroll:SetPoint("TOPLEFT", 10, -50)
+auditScroll:SetPoint("BOTTOMRIGHT", -30, 10)
+
+local auditContent = CreateFrame("Frame", nil, auditScroll)
+auditContent:SetSize(1, 1)
+auditScroll:SetScrollChild(auditContent)
+
+auditPanel.rows = {}
+
+--------------------------------------------------
+-- Create a single audit row
+--------------------------------------------------
+
+local function CreateAuditRow(parent, index)
+    local row = CreateFrame("Button", nil, parent)
+    row:SetSize(820, 20)
+    row:SetPoint("TOPLEFT", 0, -(index - 1) * 22)
+
+    -- Main text
+    row.text = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    row.text:SetPoint("LEFT", 4, 0)
+    row.text:SetJustifyH("LEFT")
+
+    -- Undo hyperlink
+    row.undo = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    row.undo:SetPoint("RIGHT", -4, 0)
+    row.undo:SetTextColor(1, 0.2, 0.2)
+    row.undo:SetText("Undo")
+    row.undo:Hide()
+
+    -- Clicking the row triggers undo
+    row:SetScript("OnClick", function(self)
+        if self.entry and self.entry.action ~= "undo" then
+            RedDKP.UndoAuditEntry(self.entry)
+        end
+    end)
+
+    return row
+end
+
+--------------------------------------------------
+-- Format audit entry into readable text
+--------------------------------------------------
+
+local function FormatAuditEntry(entry)
+    if entry.action == "field" then
+        return string.format(
+            "[%s] %s changed %s.%s from %s to %s",
+            entry.time or "?",
+            entry.editor or "?",
+            entry.player or "?",
+            entry.field or "?",
+            tostring(entry.old),
+            tostring(entry.new)
+        )
+
+    elseif entry.action == "delete" then
+        local r = entry.row or {}
+        return string.format(
+            "[%s] %s deleted %s (rot=%s LW=%d OT=%d AT=%d Bench=%d Spent=%d Bal=%d)",
+            entry.time or "?",
+            entry.editor or "?",
+            entry.player or "?",
+            tostring(r.rotated),
+            r.lastWeek or 0,
+            r.onTime or 0,
+            r.attendance or 0,
+            r.bench or 0,
+            r.spent or 0,
+            r.balance or 0
+        )
+
+    elseif entry.action == "undo" then
+        return string.format(
+            "[%s] %s undid action %s (%s)",
+            entry.time or "?",
+            entry.editor or "?",
+            entry.targetId or "?",
+            entry.info or ""
+        )
+
+    else
+        return string.format("[%s] Unknown audit entry", entry.time or "?")
+    end
+end
+
+--------------------------------------------------
+-- Refresh audit log UI
+--------------------------------------------------
+
+function auditPanel.Refresh()
     EnsureSaved()
 
-    local serialized = SerializeTable(RedDKP_Data)
-    local timestamp  = time()
+    for _, r in ipairs(auditPanel.rows) do
+        r:Hide()
+    end
+    wipe(auditPanel.rows)
 
-    Print("Broadcasting DKP data to guild...")
+    local y = 0
+    for i, entry in ipairs(RedDKP_Audit) do
+        local row = CreateAuditRow(auditContent, i)
+        row.entry = entry
 
-    SendChunked(SYNC_PREFIX, timestamp .. "#" .. serialized, "GUILD")
+        row.text:SetText(FormatAuditEntry(entry))
+
+        -- Show undo link only for undo‑able entries
+        if entry.action == "field" or entry.action == "delete" then
+            row.undo:Show()
+        else
+            row.undo:Hide()
+        end
+
+        row:Show()
+        auditPanel.rows[i] = row
+        y = y + 22
+    end
+
+    auditContent:SetHeight(y)
 end
 
-local incomingChunks   = {}
-local expectedChunks   = 0
-local receivedChunks   = 0
-local incomingTimestamp= 0
+auditPanel:SetScript("OnShow", auditPanel.Refresh)
 
-local function ResetIncoming()
-    incomingChunks    = {}
-    expectedChunks    = 0
-    receivedChunks    = 0
-    incomingTimestamp = 0
+--------------------------------------------------
+-- Add Audit Log as Tab 4
+--------------------------------------------------
+
+tabs[4] = CreateFrame("Button", nil, mainFrame, "OptionsFrameTabButtonTemplate")
+tabs[4]:SetID(4)
+tabs[4]:SetText("Audit Log")
+tabs[4]:SetPoint("LEFT", tabs[3], "RIGHT", 10, 0)
+
+PanelTemplates_SetNumTabs(mainFrame, 4)
+
+tabs[4]:SetScript("OnClick", function(self)
+    PanelTemplates_SetTab(mainFrame, 4)
+    dkpPanel:Hide()
+    editorsPanel:Hide()
+    importPanel:Hide()
+    auditPanel:Show()
+end)
+
+--------------------------------------------------
+-- End of Part 5
+--------------------------------------------------
+
+--------------------------------------------------
+-- PART 6 - SYNC SYSTEM (Send/Receive, Serialization, Logging)
+--------------------------------------------------
+
+-- Requires AceSerializer-3.0
+local AceSerializer = LibStub("AceSerializer-3.0")
+
+--------------------------------------------------
+-- Serialization helpers
+--------------------------------------------------
+
+local function Serialize(tbl)
+    local ok, result = pcall(function()
+        return AceSerializer:Serialize(tbl)
+    end)
+    if ok then return result end
+    return nil
 end
 
-local function ProcessFullSync()
-    local full = table.concat(incomingChunks, "")
-    local ts, data = string.match(full, "^(%d+)#(.+)$")
+local function Deserialize(str)
+    local ok, success, data = pcall(function()
+        return AceSerializer:Deserialize(str)
+    end)
+    if ok and success then return data end
+    return nil
+end
 
-    ts = tonumber(ts or 0)
+--------------------------------------------------
+-- Register addon prefix
+--------------------------------------------------
 
-    if ts <= RedDKP_LastSync then
-        Print("Received DKP sync, but it is not newer than your current data.")
+C_ChatInfo.RegisterAddonMessagePrefix("REDDKP_AUDIT")
+
+--------------------------------------------------
+-- Log sync events (optional but recommended)
+--------------------------------------------------
+
+local function LogSyncEvent(entry, sender)
+    AddAuditEntry({
+        action = "sync",
+        source = sender,
+        info = "Received audit entry " .. (entry.id or "?") .. " from " .. sender,
+    })
+end
+
+--------------------------------------------------
+-- Outgoing sync
+--------------------------------------------------
+
+function RedDKP_SendAuditEntry(entry)
+    local payload = Serialize(entry)
+    if not payload then
+        Print("Failed to serialize audit entry.")
         return
     end
 
-    RedDKP_LastSync = ts
-    RedDKP_Data     = DeserializeTable(data)
+    -- Broadcast to guild + raid
+    C_ChatInfo.SendAddonMessage("REDDKP_AUDIT", payload, "GUILD")
+    C_ChatInfo.SendAddonMessage("REDDKP_AUDIT", payload, "RAID")
+end
 
-    Print("DKP sync complete. Updated to timestamp " .. ts)
+--------------------------------------------------
+-- Incoming sync processor
+--------------------------------------------------
+
+local function ProcessIncomingAudit(entry, sender)
+    -- Prevent duplicates
+    for _, e in ipairs(RedDKP_Audit) do
+        if e.id == entry.id then
+            return
+        end
+    end
+
+    entry.source = sender
+
+    -- Log sync event
+    LogSyncEvent(entry, sender)
+
+    -- Temporarily disable outgoing sync to avoid loops
+    local oldSend = RedDKP_SendAuditEntry
+    RedDKP_SendAuditEntry = nil
+
+    AddAuditEntry(entry)
+
+    -- Restore sync
+    RedDKP_SendAuditEntry = oldSend
+
+    --------------------------------------------------
+    -- Apply the action (Option 1: apply immediately)
+    --------------------------------------------------
+
+    if entry.action == "field" then
+        ApplyFieldChange(entry, false)
+
+    elseif entry.action == "delete" then
+        ApplyDelete(entry, false)
+
+    elseif entry.action == "undo" then
+        -- Find the target entry and undo it
+        for _, e in ipairs(RedDKP_Audit) do
+            if e.id == entry.targetId then
+                RedDKP.UndoAuditEntry(e)
+                break
+            end
+        end
+    end
+
     UpdateTable()
 end
+
+--------------------------------------------------
+-- CHAT_MSG_ADDON listener
+--------------------------------------------------
 
 local syncFrame = CreateFrame("Frame")
 syncFrame:RegisterEvent("CHAT_MSG_ADDON")
 
-syncFrame:SetScript("OnEvent", function(_, _, prefix, msg, channel, sender)
-    if prefix ~= SYNC_PREFIX then return end
+syncFrame:SetScript("OnEvent", function(self, event, prefix, msg, channel, sender)
+    if prefix ~= "REDDKP_AUDIT" then return end
+    if sender == UnitName("player") then return end
 
-    local header, chunk = string.match(msg, "^(%d+/%d+):(.+)$")
-    if not header then return end
+    local entry = Deserialize(msg)
+    if not entry then return end
 
-    local index, total = string.match(header, "^(%d+)%/(%d+)$")
-    index = tonumber(index)
-    total = tonumber(total)
-
-    if not index or not total then return end
-
-    if index == 1 then
-        ResetIncoming()
-        expectedChunks = total
-    end
-
-    incomingChunks[index] = chunk
-    receivedChunks        = receivedChunks + 1
-
-    if receivedChunks == expectedChunks then
-        ProcessFullSync()
-    end
+    ProcessIncomingAudit(entry, sender)
 end)
 
-local function RequestSync()
-    Print("Requesting DKP sync from guild editors...")
-    SendAddonMessage(SYNC_PREFIX, "REQUEST", "GUILD")
-end
-
-local requestFrame = CreateFrame("Frame")
-requestFrame:RegisterEvent("CHAT_MSG_ADDON")
-
-requestFrame:SetScript("OnEvent", function(_, _, prefix, msg, channel, sender)
-    if prefix ~= SYNC_PREFIX then return end
-    if msg ~= "REQUEST" then return end
-
-    if IsAuthorized() then
-        Print("Responding to sync request from " .. sender)
-        BroadcastDKP()
-    end
-end)
-
-SlashCmdList["REDDKP_SYNC"] = function(msg)
-    msg = string.lower(msg or "")
-
-    if msg == "sync" then
-        RequestSync()
-        return
-    end
-
-    if msg == "broadcast" then
-        BroadcastDKP()
-        return
-    end
-
-    Print("Sync commands:")
-    Print("/reddkpsync sync - request DKP data from editors")
-    Print("/reddkpsync broadcast - send your DKP table to guild")
-end
-
-SLASH_REDDKP_SYNC1 = "/reddkpsync"
-
 --------------------------------------------------
--- MINIMAP BUTTON (LDB + FALLBACK + SEXYMAP)
+-- Add formatting for sync entries in the audit log
 --------------------------------------------------
 
-local function OpenMainToOptions()
-    ShowTab(TAB_OPTIONS)
-    UpdatePanelVisibility()
-    if not mainFrame:IsShown() then
+-- Add this inside your FormatAuditEntry() function:
+-- (If you already added it, ignore this part)
+
+--[[
+elseif entry.action == "sync" then
+    return string.format(
+        "[%s] Sync from %s: %s",
+        entry.time or "?",
+        entry.source or "?",
+        entry.info or ""
+    )
+]]
+
+--------------------------------------------------
+-- End of Part 6
+--------------------------------------------------
+
+--------------------------------------------------
+-- Part 7 — Final Polish (Slash Commands, UI Open, Versioning, Rebuild)
+--------------------------------------------------
+
+--------------------------------------------------
+-- Slash Commands
+--------------------------------------------------
+
+SLASH_REDDKP1 = "/reddkp"
+SLASH_REDDKP2 = "/dkp"
+
+SlashCmdList["REDDKP"] = function(msg)
+    msg = msg:lower():trim()
+
+    if msg == "show" or msg == "" then
         mainFrame:Show()
+        return
     end
+
+    if msg == "hide" then
+        mainFrame:Hide()
+        return
+    end
+
+    if msg == "rebuild" then
+        RedDKP.RebuildFromAudit()
+        return
+    end
+
+    Print("Commands:")
+    Print("/reddkp show   - open DKP window")
+    Print("/reddkp hide   - close DKP window")
+    Print("/reddkp rebuild - rebuild DKP from audit log")
 end
 
-local function ToggleMainToDKP()
-    if mainFrame:IsShown() and activeTab == TAB_DKP then
+--------------------------------------------------
+-- Rebuild DKP from audit log
+-- (Optional but extremely useful for debugging)
+--------------------------------------------------
+
+function RedDKP.RebuildFromAudit()
+    Print("Rebuilding DKP table from audit log...")
+
+    -- wipe DKP
+    RedDKP_Data = {}
+
+    -- apply all audit entries in reverse order (oldest first)
+    for i = #RedDKP_Audit, 1, -1 do
+        local e = RedDKP_Audit[i]
+
+        if e.action == "field" then
+            EnsurePlayer(e.player)[e.field] = e.new
+
+        elseif e.action == "delete" then
+            -- delete means: row was removed at that time
+            -- but earlier entries may recreate it
+            RedDKP_Data[e.player] = nil
+
+        elseif e.action == "undo" then
+            -- undo means: reverse the target entry
+            for _, t in ipairs(RedDKP_Audit) do
+                if t.id == e.targetId then
+                    if t.action == "field" then
+                        EnsurePlayer(t.player)[t.field] = t.old
+                    elseif t.action == "delete" then
+                        EnsurePlayer(t.player)
+                        local r = t.row or {}
+                        RedDKP_Data[t.player] = {
+                            rotated    = r.rotated,
+                            lastWeek   = r.lastWeek or 0,
+                            onTime     = r.onTime or 0,
+                            attendance = r.attendance or 0,
+                            bench      = r.bench or 0,
+                            spent      = r.spent or 0,
+                            balance    = r.balance or 0,
+                        }
+                    end
+                end
+            end
+        end
+    end
+
+    UpdateTable()
+    Print("Rebuild complete.")
+end
+
+--------------------------------------------------
+-- Minimap Button (optional)
+--------------------------------------------------
+
+local mini = CreateFrame("Button", "RedDKP_MinimapButton", Minimap)
+mini:SetSize(32, 32)
+mini:SetFrameStrata("MEDIUM")
+mini:SetNormalTexture("Interface\\AddOns\\RedDKP\\icon")
+mini:SetPoint("TOPLEFT", Minimap, "TOPLEFT", 0, 0)
+
+mini:SetScript("OnClick", function()
+    if mainFrame:IsShown() then
         mainFrame:Hide()
     else
-        ShowTab(TAB_DKP)
-        UpdatePanelVisibility()
-        UpdateTable()
         mainFrame:Show()
     end
+end)
+
+mini:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+    GameTooltip:AddLine("RedDKP")
+    GameTooltip:AddLine("Click to toggle window", 1, 1, 1)
+    GameTooltip:Show()
+end)
+
+mini:SetScript("OnLeave", function()
+    GameTooltip:Hide()
+end)
+
+--------------------------------------------------
+-- Version Broadcast
+--------------------------------------------------
+
+local REDDKP_VERSION = "1.0.0"
+
+local function SendVersion()
+    C_ChatInfo.SendAddonMessage("REDDKP_VERSION", REDDKP_VERSION, "GUILD")
 end
 
--- LDB launcher if available
-local ldb
-if LibStub then
-    ldb = LibStub:GetLibrary("LibDataBroker-1.1", true)
-end
+C_ChatInfo.RegisterAddonMessagePrefix("REDDKP_VERSION")
 
-if ldb then
-    ldb:NewDataObject("RedDKP", {
-        type = "launcher",
-        icon = "Interface\\Icons\\INV_Misc_Coin_01",
-        label = "RedDKP",
+local versionFrame = CreateFrame("Frame")
+versionFrame:RegisterEvent("CHAT_MSG_ADDON")
+versionFrame:RegisterEvent("PLAYER_LOGIN")
 
-        OnClick = function(_, button)
-            if button == "LeftButton" then
-                ToggleMainToDKP()
-            elseif button == "RightButton" then
-                OpenMainToOptions()
+versionFrame:SetScript("OnEvent", function(self, event, prefix, msg, channel, sender)
+    if event == "PLAYER_LOGIN" then
+        C_Timer.After(5, SendVersion)
+        return
+    end
+
+    if prefix == "REDDKP_VERSION" then
+        if sender ~= UnitName("player") then
+            if msg ~= REDDKP_VERSION then
+                Print("User " .. sender .. " is running RedDKP version " .. msg)
             end
-        end,
-
-        OnTooltipShow = function(tt)
-            tt:AddLine("RedDKP")
-            tt:AddLine("Left-click: Open DKP Window", 1, 1, 1)
-            tt:AddLine("Right-click: Editors / Options", 1, 1, 1)
-        end,
-    })
-end
-
--- Fallback minimap button
-local function CreateFallbackMinimapButton()
-    local mini = CreateFrame("Button", "RedDKPMiniMapButton", Minimap)
-    mini:SetSize(32, 32)
-    mini:SetFrameStrata("MEDIUM")
-    mini:SetFrameLevel(8)
-
-    mini:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
-
-    mini.icon = mini:CreateTexture(nil, "ARTWORK")
-    mini.icon:SetTexture("Interface\\Icons\\INV_Misc_Coin_01")
-    mini.icon:SetSize(20, 20)
-    mini.icon:SetPoint("CENTER")
-
-    mini:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_LEFT")
-        GameTooltip:AddLine("RedDKP")
-        GameTooltip:AddLine("Left-click: Open DKP Window", 1, 1, 1)
-        GameTooltip:AddLine("Right-click: Editors / Options", 1, 1, 1)
-        GameTooltip:AddLine("Drag: Move around minimap", 1, 1, 1)
-        GameTooltip:Show()
-    end)
-
-    mini:SetScript("OnLeave", function()
-        GameTooltip:Hide()
-    end)
-
-    mini.OnClickHandler = function(self, button)
-        if button == "LeftButton" then
-            ToggleMainToDKP()
-        elseif button == "RightButton" then
-            OpenMainToOptions()
         end
     end
+end)
 
-    mini:SetScript("OnClick", mini.OnClickHandler)
+--------------------------------------------------
+-- Initialization
+--------------------------------------------------
 
-    local function UpdateMinimapButtonPosition()
-        local angle = math.rad(RedDKP_Config.minimapAngle or 45)
-        local x = 52 * math.cos(angle)
-        local y = 52 * math.sin(angle)
-        mini:SetPoint("CENTER", Minimap, "CENTER", x, y)
-    end
+local initFrame = CreateFrame("Frame")
+initFrame:RegisterEvent("ADDON_LOADED")
 
-    if not SexyMap then
-        mini:RegisterForDrag("LeftButton")
+initFrame:SetScript("OnEvent", function(self, event, addon)
+    if addon ~= ADDON_NAME then return end
 
-        mini:SetScript("OnDragStart", function(self)
-            self:SetScript("OnUpdate", function()
-                local mx, my = Minimap:GetCenter()
-                local px, py = GetCursorPosition()
-                local scale = UIParent:GetEffectiveScale()
+    EnsureSaved()
+    UpdateTable()
 
-                px = px / scale
-                py = py / scale
+    Print("RedDKP loaded. Type /reddkp to open.")
+end)
 
-                local angle = math.deg(math.atan2(py - my, px - mx))
-                RedDKP_Config.minimapAngle = angle
+--------------------------------------------------
+-- End of Part 7
+--------------------------------------------------
 
-                UpdateMinimapButtonPosition()
-            end)
-        end)
-
-        mini:SetScript("OnDragStop", function(self)
-            self:SetScript("OnUpdate", nil)
-        end)
-    end
-
-    UpdateMinimapButtonPosition()
-
-    local function RegisterWithSexyMap()
-        if not SexyMap or not SexyMap.AddButton then
-            return false
-        end
-
-        SexyMap:AddButton(mini)
-        mini:SetScript("OnClick", mini.OnClickHandler)
-        return true
-    end
-
-    local smOK = RegisterWithSexyMap()
-    if not smOK then
-        local smWatcher = CreateFrame("Frame")
-        smWatcher:RegisterEvent("ADDON_LOADED")
-        smWatcher:SetScript("OnEvent", function(_, _, addon)
-            if addon == "SexyMap" then
-                RegisterWithSexyMap()
-            end
-        end)
-    end
-end
-
-if not ldb then
-    CreateFallbackMinimapButton()
-end
