@@ -5,13 +5,4 @@
 ## Notes: Distributed DKP with audit log, undo, and sync
 ## SavedVariables: RedDKP_Data, RedDKP_Config, RedDKP_Audit
 
-Core.lua
-Data.lua
-Audit.lua
-Undo.lua
-Sync.lua
-UI_DKP.lua
-UI_Editors.lua
-UI_ImportExport.lua
-UI_AuditLog.lua
-Init.lua
+RedDKP.lua
