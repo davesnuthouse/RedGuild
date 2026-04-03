@@ -1,21 +1,22 @@
 -- RedDKP.lua
 -- Simple DKP tracker with editors, raid tools, import/export, and audit log.
 
-RedDKP_Data   = RedDKP_Data   or {}
-RedDKP_Config = RedDKP_Config or {}
-RedDKP_Audit  = RedDKP_Audit  or {}
-RedDKP_Usage  = RedDKP_Usage  or {}
+RedDKP_Data           = RedDKP_Data           or {}
+RedDKP_Config         = RedDKP_Config         or {}
+RedDKP_Audit          = RedDKP_Audit          or {}
+RedDKP_Usage          = RedDKP_Usage          or {}
+RedDKP_ImpExp_Export  = RedDKP_ImpExp_Export  or nil
+RedDKP_ImpExp_Import  = RedDKP_ImpExp_Import  or nil
 
 local addonName = ...
 local mainFrame
-local dkpPanel, raidPanel, editorsPanel, exportPanel, importPanel, auditPanel
+local dkpPanel, raidPanel, editorsPanel, ioPanel, auditPanel
 
 local TAB_DKP     = 1
 local TAB_RAID    = 2
 local TAB_EDITORS = 3
-local TAB_EXPORT  = 4
-local TAB_IMPORT  = 5
-local TAB_AUDIT   = 6
+local TAB_IO      = 4
+local TAB_AUDIT   = 5
 
 local activeTab = TAB_DKP
 
@@ -141,7 +142,7 @@ end
 local tabs = {}
 
 local function ShowTab(tab)
-    if (tab == TAB_RAID or tab == TAB_EXPORT or tab == TAB_IMPORT) and not IsAuthorized() then
+    if (tab == TAB_RAID or tab == TAB_IO) and not IsAuthorized() then
         Print("You must be an editor to access this tab.")
         return
     end
@@ -158,8 +159,7 @@ local function ShowTab(tab)
     dkpPanel:Hide()
     raidPanel:Hide()
     editorsPanel:Hide()
-    exportPanel:Hide()
-    importPanel:Hide()
+    ioPanel:Hide()
     auditPanel:Hide()
 
     if tab == TAB_DKP then
@@ -168,10 +168,8 @@ local function ShowTab(tab)
         raidPanel:Show()
     elseif tab == TAB_EDITORS then
         editorsPanel:Show()
-    elseif tab == TAB_EXPORT then
-        exportPanel:Show()
-    elseif tab == TAB_IMPORT then
-        importPanel:Show()
+    elseif tab == TAB_IO then
+        ioPanel:Show()
     elseif tab == TAB_AUDIT then
         auditPanel:Show()
     end
@@ -402,32 +400,81 @@ end
 --------------------------------------------------
 
 local function CreateFallbackMinimapButton()
-    local minimapButton = CreateFrame("Button", "RedDKP_MinimapButton", Minimap)
-    minimapButton:SetSize(32, 32)
-    minimapButton:SetFrameStrata("MEDIUM")
-    minimapButton:SetPoint("TOPLEFT", Minimap, "TOPLEFT")
+    local btn = CreateFrame("Button", "RedDKP_MinimapButton", Minimap)
+    btn:SetSize(32, 32)
+    btn:SetFrameStrata("MEDIUM")
 
-    local icon = minimapButton:CreateTexture(nil, "ARTWORK")
+    --------------------------------------------------
+    -- SAVED POSITION (ANGLE AROUND MINIMAP)
+    --------------------------------------------------
+    RedDKP_Config.minimapAngle = RedDKP_Config.minimapAngle or 45
+
+    --------------------------------------------------
+    -- ICON
+    --------------------------------------------------
+    local icon = btn:CreateTexture(nil, "ARTWORK")
     icon:SetTexture("Interface\\Icons\\INV_Misc_Coin_01")
-    icon:SetAllPoints(minimapButton)
-    icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+    icon:SetAllPoints(btn)
+    icon:SetMask("Interface\\Minimap\\UI-Minimap-Background")
 
-    local mask
-    if Minimap.GetMaskTexture then
-        local ok, result = pcall(function()
-            return Minimap:GetMaskTexture(1)
+    --------------------------------------------------
+    -- BORDER (correct size for 32x32 icon)
+    --------------------------------------------------
+    local border = btn:CreateTexture(nil, "OVERLAY")
+    border:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
+    border:SetSize(54, 54)
+    border:SetPoint("CENTER", btn, "CENTER", 11, -12)
+
+    --------------------------------------------------
+    -- HIGHLIGHT
+    --------------------------------------------------
+    local highlight = btn:CreateTexture(nil, "HIGHLIGHT")
+    highlight:SetTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
+    highlight:SetBlendMode("ADD")
+    highlight:SetAllPoints(btn)
+
+    --------------------------------------------------
+    -- POSITIONING AROUND MINIMAP
+    --------------------------------------------------
+    local function UpdateButtonPosition()
+        local angle = math.rad(RedDKP_Config.minimapAngle)
+        local radius = 80  -- good default for Anniversary minimap
+
+        local x = math.cos(angle) * radius
+        local y = math.sin(angle) * radius
+
+        btn:SetPoint("CENTER", Minimap, "CENTER", x, y)
+    end
+
+    --------------------------------------------------
+    -- DRAGGING (circular movement)
+    --------------------------------------------------
+    btn:SetScript("OnDragStart", function(self)
+        self:SetScript("OnUpdate", function()
+            local mx, my = Minimap:GetCenter()
+            local px, py = GetCursorPosition()
+            local scale = UIParent:GetEffectiveScale()
+
+            px = px / scale
+            py = py / scale
+
+            local angle = math.deg(math.atan2(py - my, px - mx))
+            RedDKP_Config.minimapAngle = angle
+
+            UpdateButtonPosition()
         end)
-        if ok and result then
-            mask = result
-        end
-    end
-    if mask then
-        icon:SetMask(mask)
-    else
-        icon:SetMask("Interface\\CharacterFrame\\TempPortraitAlphaMask")
-    end
+    end)
 
-    minimapButton:SetScript("OnClick", function(_, button)
+    btn:SetScript("OnDragStop", function(self)
+        self:SetScript("OnUpdate", nil)
+    end)
+
+    btn:RegisterForDrag("LeftButton")
+
+    --------------------------------------------------
+    -- CLICK ACTIONS
+    --------------------------------------------------
+    btn:SetScript("OnClick", function(_, button)
         if button == "LeftButton" then
             if mainFrame:IsShown() then
                 mainFrame:Hide()
@@ -440,6 +487,11 @@ local function CreateFallbackMinimapButton()
             ShowTab(TAB_EDITORS)
         end
     end)
+
+    --------------------------------------------------
+    -- INITIAL POSITION
+    --------------------------------------------------
+    UpdateButtonPosition()
 end
 
 --------------------------------------------------
@@ -460,30 +512,6 @@ StaticPopupDialogs["REDDKP_DELETE_PLAYER"] = {
         RedDKP_Data[player] = nil
         UpdateTable()
         Print("Deleted DKP record for " .. player)
-    end,
-    timeout = 0,
-    whileDead = true,
-    hideOnEscape = true,
-}
-
-StaticPopupDialogs["REDDKP_CONFIRM_IMPORT"] = {
-    text = "This will MERGE imported DKP data with existing entries.\nMatching names will be replaced. Continue?",
-    button1 = "Import",
-    button2 = "Cancel",
-    OnAccept = function(self, data)
-        for name, imported in pairs(data) do
-            local d = EnsurePlayer(name)
-            for field, newValue in pairs(imported) do
-                local oldValue = d[field]
-                if oldValue ~= newValue then
-                    LogAudit(name, field, tostring(oldValue), tostring(newValue))
-                end
-                d[field] = newValue
-            end
-        end
-        RecalculateAllBalances()
-        UpdateTable()
-        Print("DKP data merged successfully.")
     end,
     timeout = 0,
     whileDead = true,
@@ -645,27 +673,23 @@ local function CreateUI()
     CreateTab(TAB_DKP,     "DKP")
     CreateTab(TAB_RAID,    "RL Tools")
     CreateTab(TAB_EDITORS, "Editors")
-    CreateTab(TAB_EXPORT,  "Export")
-    CreateTab(TAB_IMPORT,  "Import")
+    CreateTab(TAB_IO,      "Import / Export")
     CreateTab(TAB_AUDIT,   "Audit Log")
 
     dkpPanel     = CreateFrame("Frame", nil, mainFrame); LayoutPanel(dkpPanel)
     raidPanel    = CreateFrame("Frame", nil, mainFrame); LayoutPanel(raidPanel)
     editorsPanel = CreateFrame("Frame", nil, mainFrame); LayoutPanel(editorsPanel)
-    exportPanel  = CreateFrame("Frame", nil, mainFrame); LayoutPanel(exportPanel)
-    importPanel  = CreateFrame("Frame", nil, mainFrame); LayoutPanel(importPanel)
+    ioPanel      = CreateFrame("Frame", nil, mainFrame); LayoutPanel(ioPanel)
     auditPanel   = CreateFrame("Frame", nil, mainFrame); LayoutPanel(auditPanel)
 
     local function UpdateTabVisibility()
         local isEditor = IsAuthorized()
         if not isEditor then
-            if tabs[TAB_RAID]   then tabs[TAB_RAID]:Hide()   end
-            if tabs[TAB_EXPORT] then tabs[TAB_EXPORT]:Hide() end
-            if tabs[TAB_IMPORT] then tabs[TAB_IMPORT]:Hide() end
+            if tabs[TAB_RAID] then tabs[TAB_RAID]:Hide() end
+            if tabs[TAB_IO]   then tabs[TAB_IO]:Hide()   end
         else
-            if tabs[TAB_RAID]   then tabs[TAB_RAID]:Show()   end
-            if tabs[TAB_EXPORT] then tabs[TAB_EXPORT]:Show() end
-            if tabs[TAB_IMPORT] then tabs[TAB_IMPORT]:Show() end
+            if tabs[TAB_RAID] then tabs[TAB_RAID]:Show() end
+            if tabs[TAB_IO]   then tabs[TAB_IO]:Show()   end
         end
     end
     UpdateTabVisibility()
@@ -1138,35 +1162,37 @@ local function CreateUI()
     note:SetText("|cffaaaaaa* Guild leaders are editors by default.|r")
 
     --------------------------------------------------
-    -- EXPORT PANEL (scrollable, read-only)
+    -- IMPORT / EXPORT PANEL (CSV via SavedVariables)
     --------------------------------------------------
 
-    local exportScroll = CreateFrame("ScrollFrame", nil, exportPanel, "UIPanelScrollFrameTemplate")
-    exportScroll:SetPoint("TOPLEFT", 10, -10)
-    exportScroll:SetPoint("BOTTOMRIGHT", -30, 40)
+    local ioTitle = ioPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    ioTitle:SetPoint("TOPLEFT", 10, -10)
+    ioTitle:SetText("Import / Export (CSV / LUA hybrid file)")
 
-    local exportBox = CreateFrame("EditBox", nil, exportScroll)
-    exportBox:SetMultiLine(true)
-    exportBox:SetAutoFocus(false)
-    exportBox:SetFontObject(GameFontHighlightSmall)
-    exportBox:SetWidth(740)
-    exportBox:SetEnabled(false)
-    exportBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+    local exportCSV = CreateFrame("Button", nil, ioPanel, "UIPanelButtonTemplate")
+    exportCSV:SetSize(220, 26)
+    exportCSV:SetPoint("TOPLEFT", ioTitle, "BOTTOMLEFT", 0, -20)
+    exportCSV:SetText("Export CSV to SavedVariables")
 
-    exportScroll:SetScrollChild(exportBox)
+    local importCSV = CreateFrame("Button", nil, ioPanel, "UIPanelButtonTemplate")
+    importCSV:SetSize(220, 26)
+    importCSV:SetPoint("LEFT", exportCSV, "RIGHT", 20, 0)
+    importCSV:SetText("Import CSV from SavedVariables")
 
-    local function BuildExport()
-        local t = {}
-        table.insert(t, "return {")
+    local function BuildCSV()
+        local lines = {}
+        table.insert(lines, "name,rotated,lastWeek,onTime,attendance,bench,spent,balance,class")
+
         local names = {}
         for name in pairs(RedDKP_Data) do
             table.insert(names, name)
         end
         table.sort(names)
+
         for _, name in ipairs(names) do
             local d = EnsurePlayer(name)
-            table.insert(t, string.format(
-                "  [\"%s\"] = {rotated=%s,lastWeek=%d,onTime=%d,attendance=%d,bench=%d,spent=%d,balance=%d,class=%q},",
+            table.insert(lines, string.format(
+                "%s,%s,%d,%d,%d,%d,%d,%d,%s",
                 name,
                 d.rotated and "true" or "false",
                 d.lastWeek or 0,
@@ -1178,97 +1204,105 @@ local function CreateUI()
                 d.class or ""
             ))
         end
-        table.insert(t, "}")
-        exportBox:SetText(table.concat(t, "\n"))
-        exportBox:HighlightText()
-        exportScroll:SetVerticalScroll(0)
+
+        return table.concat(lines, "\n")
     end
 
-    exportPanel:SetScript("OnShow", BuildExport)
-
-    local copyBtn = CreateFrame("Button", nil, exportPanel, "UIPanelButtonTemplate")
-    copyBtn:SetSize(160, 24)
-    copyBtn:SetPoint("BOTTOM", exportPanel, "BOTTOM", 0, 10)
-    copyBtn:SetText("Copy to Clipboard")
-    copyBtn:SetScript("OnClick", function()
-        exportBox:HighlightText()
-        exportBox:SetFocus()
-    end)
-
-    --------------------------------------------------
-    -- IMPORT PANEL
-    --------------------------------------------------
-
-    local importExample = importPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    importExample:SetPoint("TOPLEFT", importPanel, "TOPLEFT", 10, -10)
-    importExample:SetText("|cffaaaaaaExample format:  [\"Playername\"] = {rotated=false,lastWeek=0,onTime=0,attendance=0,bench=0,spent=0,balance=0,class=\"MAGE\"},|r")
-
-    local importScroll = CreateFrame("ScrollFrame", nil, importPanel, "UIPanelScrollFrameTemplate")
-    importScroll:SetPoint("TOPLEFT", importExample, "BOTTOMLEFT", 0, -10)
-    importScroll:SetPoint("BOTTOMRIGHT", -30, 40)
-
-    local importBox = CreateFrame("EditBox", nil, importScroll)
-    importBox:SetMultiLine(true)
-    importBox:SetAutoFocus(false)
-    importBox:SetFontObject(GameFontHighlightSmall)
-    importBox:SetWidth(740)
-    importBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-
-    importScroll:SetScrollChild(importBox)
-
-    local pasteBtn = CreateFrame("Button", nil, importPanel, "UIPanelButtonTemplate")
-    pasteBtn:SetSize(120, 24)
-    pasteBtn:SetPoint("BOTTOMLEFT", importPanel, "BOTTOMLEFT", 10, 10)
-    pasteBtn:SetText("Paste Clipboard")
-    pasteBtn:SetScript("OnClick", function()
-        importBox:SetFocus()
-        importBox:HighlightText()
-    end)
-
-    local importConfirmBtn = CreateFrame("Button", nil, importPanel, "UIPanelButtonTemplate")
-    importConfirmBtn:SetSize(140, 24)
-    importConfirmBtn:SetPoint("LEFT", pasteBtn, "RIGHT", 20, 0)
-    importConfirmBtn:SetText("Confirm Import")
-
-    local clearBtn = CreateFrame("Button", nil, importPanel, "UIPanelButtonTemplate")
-    clearBtn:SetSize(100, 24)
-    clearBtn:SetPoint("LEFT", importConfirmBtn, "RIGHT", 20, 0)
-    clearBtn:SetText("Clear")
-    clearBtn:SetScript("OnClick", function()
-        importBox:SetText("")
-        Print("Import box cleared.")
-    end)
-
-    local function ValidateSyntax(text)
-        local ok, result = pcall(function()
-            return loadstring("return " .. text)()
-        end)
-        if not ok then
-            return false, "Lua parser error: " .. tostring(result)
+    exportCSV:SetScript("OnClick", function()
+        if not IsAuthorized() then
+            Print("Only editors can export DKP data.")
+            return
         end
-        if type(result) ~= "table" then
-            return false, "Parsed result is not a table."
+        RedDKP_ImpExp_Export = BuildCSV()
+        Print("CSV data exported to LUA file. Log out and open:")
+        Print("World of Warcraft/_anniversary_/WTF/Account/<ACCOUNT>/SavedVariables/RedDKP.lua")
+    end)
+
+    local function ParseCSVLine(line)
+        local fields = {}
+        for v in string.gmatch(line, "([^,]+)") do
+            table.insert(fields, v)
         end
-        return true, result
+        return fields
     end
 
-    importConfirmBtn:SetScript("OnClick", function()
+    importCSV:SetScript("OnClick", function()
         if not IsAuthorized() then
             Print("Only editors can import DKP data.")
             return
         end
-        local text = importBox:GetText()
+
+        local text = RedDKP_ImpExp_Import
         if not text or text == "" then
-            Print("Import box is empty.")
+            Print("No CSV data found in World of Warcraft/_anniversary_/WTF/Account/<ACCOUNT>/SavedVariables/RedDKP.lua")
+			Print("Create or Edit LUA file first.")
             return
         end
-        local ok, result = ValidateSyntax(text)
-        if not ok then
-            Print("Import failed: " .. result)
+
+        local lines = { strsplit("\n", text) }
+        if #lines <= 1 then
+            Print("CSV appears to be empty or missing data rows.")
             return
         end
-        StaticPopup_Show("REDDKP_CONFIRM_IMPORT", nil, nil, result)
+
+        table.remove(lines, 1) -- remove header
+
+        for _, line in ipairs(lines) do
+            line = line:gsub("\r", "")
+            if line ~= "" then
+                local f = ParseCSVLine(line)
+                local name = f[1]
+                if name and name ~= "" then
+                    local d = EnsurePlayer(name)
+
+                    local old = {
+                        rotated    = d.rotated,
+                        lastWeek   = d.lastWeek,
+                        onTime     = d.onTime,
+                        attendance = d.attendance,
+                        bench      = d.bench,
+                        spent      = d.spent,
+                        balance    = d.balance,
+                        class      = d.class,
+                    }
+
+                    d.rotated    = (f[2] == "true" or f[2] == "1")
+                    d.lastWeek   = tonumber(f[3]) or d.lastWeek
+                    d.onTime     = tonumber(f[4]) or d.onTime
+                    d.attendance = tonumber(f[5]) or d.attendance
+                    d.bench      = tonumber(f[6]) or d.bench
+                    d.spent      = tonumber(f[7]) or d.spent
+                    -- f[8] is balance; we will recalc after import
+                    d.class      = (f[9] and f[9] ~= "") and f[9] or d.class
+
+                    for k, v in pairs(d) do
+                        if old[k] ~= v then
+                            LogAudit(name, k, tostring(old[k]), tostring(v))
+                        end
+                    end
+                end
+            end
+        end
+
+        RecalculateAllBalances()
+        UpdateTable()
+        Print("CSV import complete. Records merged or created for names present in the CSV.")
     end)
+
+    local footer1 = ioPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    footer1:SetPoint("BOTTOMLEFT", ioPanel, "BOTTOMLEFT", 10, 50)
+    footer1:SetJustifyH("LEFT")
+    footer1:SetText("|cffaaaaaa* Blizzard to not allow import and export to CSV files from within World of Warcraft.|r")
+
+    local footer2 = ioPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    footer2:SetPoint("BOTTOMLEFT", ioPanel, "BOTTOMLEFT", 10, 30)
+    footer2:SetJustifyH("LEFT")
+    footer2:SetText("|cffaaaaaa* Exported CSV is written to: World of Warcraft/_anniversary_/WTF/Account/<ACCOUNT>/SavedVariables/RedDKP.lua|r")
+
+    local footer3 = ioPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    footer3:SetPoint("BOTTOMLEFT", ioPanel, "BOTTOMLEFT", 10, 10)
+    footer3:SetJustifyH("LEFT")
+    footer3:SetText("|cffaaaaaa* Please export the data to the LUA file first before importing, being mindful to maintain the formatting of the file when you edit.|r")
 
     --------------------------------------------------
     -- AUDIT PANEL
