@@ -11,8 +11,13 @@ local REDDKP_VERSION = "1.0.0"
 local VERSION_PREFIX = "REDDKP_VER"
 local SYNC_PREFIX    = "REDDKP_SYNC"
 
+-- Smart Sync ON by default
 RedDKP_Config.smartSync = (RedDKP_Config.smartSync ~= false)
+
+-- Track online addon users dynamically
 RedDKP_Config.addonUsers = RedDKP_Config.addonUsers or {}
+
+-- Track online editors
 RedDKP_Config.onlineEditors = RedDKP_Config.onlineEditors or {}
 
 local mainFrame
@@ -27,6 +32,12 @@ local activeTab = TAB_DKP
 
 local SORT_COLOR   = "|cff3399ff"
 local NORMAL_COLOR = "|cffffffff"
+
+local forceBtn
+
+--------------------------------------------------
+-- UTILITIES
+--------------------------------------------------
 
 local function Print(msg)
     DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00[RedDKP]|r " .. tostring(msg))
@@ -79,33 +90,35 @@ local function EnsureOnlineEditors()
     RedDKP_Config.onlineEditors = RedDKP_Config.onlineEditors or {}
 end
 
-local syncWarning
-
 local function SafeSetSyncWarning(text)
     if syncWarning then
-        syncWarning:SetText(text or "")
+        SafeSetSyncWarning(text or "")
     end
 end
+
+--------------------------------------------------
+-- AUDIT LOGGING (with unique IDs)
+--------------------------------------------------
 
 local function GenerateAuditID()
     return tostring(time()) .. "-" .. math.random(100000, 999999)
 end
 
-function LogAudit(player, field, old, new)
-    -- Do not log if nothing changed
-    if old == new then
-        return
-    end
-
-    table.insert(RedDKP_Audit, {
-        id    = GenerateAuditID(),
-        name  = player,
-        field = field,
-        old   = old,
-        new   = new,
-        time  = date("%Y-%m-%d %H:%M:%S"),
+local function LogAudit(player, field, oldValue, newValue)
+    table.insert(RedDKP_Audit, 1, {
+        id     = GenerateAuditID(),
+        player = player,
+        field  = field,
+        old    = oldValue,
+        new    = newValue,
+        editor = UnitName("player"),
+        time   = date("%Y-%m-%d %H:%M:%S"),
     })
 end
+
+--------------------------------------------------
+-- GUILD LEADER / PROTECTED EDITOR
+--------------------------------------------------
 
 local function GetGuildLeader()
     if not IsInGuild() then return nil end
@@ -126,9 +139,16 @@ local function GetProtectedEditor()
     return UnitName("player")
 end
 
+--------------------------------------------------
+-- RAID LEADER / MASTER LOOTER CHECK
+--------------------------------------------------
+
 local function IsRaidLeaderOrMasterLooter()
     if not IsInRaid() then return false end
-    if UnitIsGroupLeader("player") then return true end
+
+    if UnitIsGroupLeader("player") then
+        return true
+    end
 
     local method, mlParty, mlRaid = GetLootMethod()
     if method == "master" then
@@ -146,12 +166,16 @@ local function IsRaidLeaderOrMasterLooter()
     return false
 end
 
-RedDKP_Usage = RedDKP_Usage or {}
+--------------------------------------------------
+-- DAILY USAGE TRACKING
+--------------------------------------------------
 
 local function UsedToday(key)
     local player = UnitName("player")
     RedDKP_Usage[player] = RedDKP_Usage[player] or {}
-    return RedDKP_Usage[player][key] == date("%Y-%m-%d")
+    local last = RedDKP_Usage[player][key]
+    local today = date("%Y-%m-%d")
+    return last == today
 end
 
 local function MarkUsedToday(key)
@@ -159,6 +183,10 @@ local function MarkUsedToday(key)
     RedDKP_Usage[player] = RedDKP_Usage[player] or {}
     RedDKP_Usage[player][key] = date("%Y-%m-%d")
 end
+
+--------------------------------------------------
+-- VERSION COMPARISON
+--------------------------------------------------
 
 local function CompareVersions(localVer, remoteVer)
     local function split(v)
@@ -171,10 +199,16 @@ local function CompareVersions(localVer, remoteVer)
 
     if ra > la then return true end
     if ra < la then return false end
+
     if rb > lb then return true end
     if rb < lb then return false end
+
     return rc > lc
 end
+
+--------------------------------------------------
+-- ADDON USER DETECTION (Dynamic)
+--------------------------------------------------
 
 local function MarkAddonUserOnline(name)
     EnsureAddonUsers()
@@ -191,8 +225,12 @@ local function ClearOfflineAddonUsers()
     end
 end
 
+--------------------------------------------------
+-- ONLINE EDITOR DETECTION
+--------------------------------------------------
+
 local function UpdateOnlineEditors()
-    EnsureOnlineEditors()
+	EnsureOnlineEditors()
     wipe(RedDKP_Config.onlineEditors)
 
     if not IsInGuild() then return end
@@ -208,20 +246,9 @@ local function UpdateOnlineEditors()
     end
 end
 
-local function GetHighestRankEditor()
-    EnsureOnlineEditors()
-    local bestName = nil
-    local bestRank = 99
-
-    for name, rank in pairs(RedDKP_Config.onlineEditors) do
-        if rank < bestRank then
-            bestRank = rank
-            bestName = name
-        end
-    end
-
-    return bestName
-end
+--------------------------------------------------
+-- TAB SYSTEM
+--------------------------------------------------
 
 local tabs = {}
 
@@ -273,6 +300,10 @@ function ShowTab(id)
     end
 end
 
+--------------------------------------------------
+-- DKP TABLE DEFINITIONS (REQUIRED)
+--------------------------------------------------
+
 headers = {
     { text = "Name",       width = 120 },
     { text = "LastWeek",   width = 70  },
@@ -281,7 +312,7 @@ headers = {
     { text = "Bench",      width = 60  },
     { text = "Spent",      width = 60  },
     { text = "Balance",    width = 70  },
-    { text = "",           width = 60  },
+    { text = "",    width = 60  },
 }
 
 fieldMap = {
@@ -303,13 +334,19 @@ auditRows = {}
 currentSortField = "name"
 currentSortAscending = true
 
+--------------------------------------------------
+-- UPDATE DKP TABLE (REQUIRED)
+--------------------------------------------------
+
 function UpdateTable()
     sortedNames = {}
 
+    -- Collect all player names
     for name in pairs(RedDKP_Data) do
         table.insert(sortedNames, name)
     end
 
+    -- Sort using currentSortField + currentSortAscending
     table.sort(sortedNames, function(a, b)
         local da = RedDKP_Data[a]
         local db = RedDKP_Data[b]
@@ -319,6 +356,7 @@ function UpdateTable()
         local fa = da[currentSortField]
         local fb = db[currentSortField]
 
+        -- Name sorting
         if currentSortField == "name" then
             if currentSortAscending then
                 return a < b
@@ -327,6 +365,7 @@ function UpdateTable()
             end
         end
 
+        -- Numeric sorting
         fa = tonumber(fa) or 0
         fb = tonumber(fb) or 0
 
@@ -337,6 +376,7 @@ function UpdateTable()
         end
     end)
 
+    -- Update rows
     for i, row in ipairs(rows) do
         local name = sortedNames[i]
         if not name then
@@ -345,6 +385,7 @@ function UpdateTable()
             local d = RedDKP_Data[name]
             row.index = i
 
+            -- Class color
             local classColor = "|cffffffff"
             if d.class then
                 local c = RAID_CLASS_COLORS[d.class]
@@ -353,6 +394,7 @@ function UpdateTable()
                 end
             end
 
+            -- Fill columns
             row.cols[1]:SetText(classColor .. name .. "|r")
             row.cols[2]:SetText(d.lastWeek or 0)
             row.cols[3]:SetText(d.onTime or 0)
@@ -366,27 +408,161 @@ function UpdateTable()
     end
 end
 
-local auditRows = {}
-function UpdateAuditLog()
-    if not auditRows then return end
-    if not RedDKP_Audit then return end
+--------------------------------------------------
+-- RAID LEADER / MASTER LOOTER CHECK
+--------------------------------------------------
 
+function IsRaidLeaderOrMasterLooter()
+    if not IsInRaid() then return false end
+
+    local name = UnitName("player")
+
+    -- Raid leader
+    if UnitIsGroupLeader("player") then
+        return true
+    end
+
+    -- Master looter
+    local method, mlParty, mlRaid = GetLootMethod()
+    if method == "master" then
+        local mlName
+        if mlParty then
+            mlName = GetRaidRosterInfo(mlParty + 1)
+        elseif mlRaid then
+            mlName = GetRaidRosterInfo(mlRaid)
+        end
+        if mlName == name then
+            return true
+        end
+    end
+
+    return false
+end
+
+--------------------------------------------------
+-- DAILY USE TRACKING (OnTime, Attendance, etc.)
+--------------------------------------------------
+
+RedDKP_Config.usedToday = RedDKP_Config.usedToday or {}
+
+function UsedToday(key)
+    local today = date("%Y-%m-%d")
+    return RedDKP_Config.usedToday[key] == today
+end
+
+function MarkUsedToday(key)
+    local today = date("%Y-%m-%d")
+    RedDKP_Config.usedToday[key] = today
+end
+
+--------------------------------------------------
+-- RL TOOLS POPUPS
+--------------------------------------------------
+
+StaticPopupDialogs["REDDKP_ON_TIME_CHECK"] = {
+    text = "Allocate On-Time DKP to all raid members?",
+    button1 = "Yes",
+    button2 = "No",
+    OnAccept = function()
+        AllocateDKPToRaid("onTime", 5) -- or whatever your value was
+    end,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+}
+
+StaticPopupDialogs["REDDKP_ALLOCATE_ATTENDANCE"] = {
+    text = "Allocate Attendance DKP to all raid members?",
+    button1 = "Yes",
+    button2 = "No",
+    OnAccept = function()
+        AllocateDKPToRaid("attendance", 15) -- or whatever your value was
+    end,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+}
+
+StaticPopupDialogs["REDDKP_NEW_WEEK"] = {
+    text = "Start a new DKP week? This moves Balance data to LastWeek and resets all other values.",
+    button1 = "Start Week",
+    button2 = "Cancel",
+    OnAccept = function()
+        for name, d in pairs(RedDKP_Data) do
+            local oldBalance = d.balance or 0
+
+            d.lastWeek   = oldBalance
+            d.onTime     = 0
+            d.attendance = 0
+            d.bench      = 0
+            d.spent      = 0
+            d.balance = 0
+
+            LogAudit(name, "newWeek", "previous balance: "..oldBalance, "week reset")
+        end
+
+        UpdateTable()
+        Print("A new DKP week has begun.")
+    end,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+}
+
+StaticPopupDialogs["REDDKP_BROADCAST_DKP"] = {
+    text = "Broadcast the DKP table to the raid?",
+    button1 = "Broadcast",
+    button2 = "Cancel",
+    OnAccept = function()
+        if not IsInRaid() then
+            Print("You must be in a raid to broadcast DKP.")
+            return
+        end
+
+        SendChatMessage("Name       Bal  LW  OT  AT  Bench  Spent", "RAID")
+        local names = {}
+        for name in pairs(RedDKP_Data) do
+            table.insert(names, name)
+        end
+        table.sort(names)
+        for _, name in ipairs(names) do
+            local d = EnsurePlayer(name)
+            local msg = string.format(
+                "%-10s %4d %3d %3d %3d %5d %6d",
+                name,
+                d.balance or 0,
+                d.lastWeek or 0,
+                d.onTime or 0,
+                d.attendance or 0,
+                d.bench or 0,
+                d.spent or 0
+            )
+            SendChatMessage(msg, "RAID")
+        end
+        Print("DKP table broadcast to raid.")
+    end,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+}
+
+--------------------------------------------------
+-- AUDIT LOG UI
+--------------------------------------------------
+
+local auditRows = {}
+local function UpdateAuditLog()
     for i, row in ipairs(auditRows) do
         local entry = RedDKP_Audit[i]
-
         if entry then
-            -- Nil‑safe fields
-            local t  = entry.time  or "unknown"
-			local s   = entry.editor  or "unknown"
-            local n  = entry.player  or "unknown"
-            local f  = entry.field or "unknown"
-            local o  = (entry.old ~= nil) and tostring(entry.old) or "nil"
-            local nw = (entry.new ~= nil) and tostring(entry.new) or "nil"
-
             row.text:SetText(string.format("[%s] %s changed %s's %s from %s to %s",
-                t, s, n, f, o, nw
+                entry.time,
+                entry.editor,
+                entry.player,
+                entry.field,
+                tostring(entry.old),
+                tostring(entry.new)
             ))
-
             row:Show()
         else
             row:Hide()
@@ -394,7 +570,13 @@ function UpdateAuditLog()
     end
 end
 
-function RefreshEditorList()
+--------------------------------------------------
+-- EDITORS PANEL (data helpers)
+--------------------------------------------------
+
+local editorRows = {}
+
+local function RefreshEditorList()
     EnsureSaved()
 
     local guildLeader = GetGuildLeader()
@@ -441,6 +623,39 @@ function RefreshEditorList()
     end
 end
 
+--------------------------------------------------
+-- BROADCAST DKP TABLE TO RAID
+--------------------------------------------------
+function BroadcastDKPTable()
+    if not IsAuthorized() then
+        Print("Only editors can broadcast DKP.")
+        return
+    end
+
+    EnsureSaved()
+
+    local payload = {
+        type = "FULL_SYNC",
+        dkp = RedDKP_DKPTable,
+        timestamp = time(),
+    }
+
+    local serialized = LibSerialize:Serialize(payload)
+    local compressed = LibDeflate:CompressDeflate(serialized)
+    local encoded = LibDeflate:EncodeForWoWAddonChannel(compressed)
+
+    C_ChatInfo.SendAddonMessage("REDDKP_SYNC", encoded, "RAID")
+
+    Print("Broadcasted DKP table to raid.")
+    AddAuditEntry("Broadcasted full DKP table to raid.")
+end
+
+--------------------------------------------------
+-- CREATE UI
+--------------------------------------------------
+
+local syncWarning -- global banner reference
+
 local function CreateUI()
     mainFrame = CreateFrame("Frame", "RedDKPFrame", UIParent, "BasicFrameTemplateWithInset")
     mainFrame:SetSize(800, 500)
@@ -448,7 +663,7 @@ local function CreateUI()
     mainFrame:Hide()
     mainFrame.title = mainFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     mainFrame.title:SetPoint("CENTER", mainFrame.TitleBg, "CENTER", 0, 0)
-    mainFrame.title:SetText("RedDKP")
+    mainFrame.title:SetText("RedDKP - brought to you by a clueless idiot called Lunátic")
 
     mainFrame:SetMovable(true)
     mainFrame:EnableMouse(true)
@@ -467,62 +682,71 @@ local function CreateUI()
     editorsPanel = CreateFrame("Frame", nil, mainFrame); LayoutPanel(editorsPanel)
     auditPanel   = CreateFrame("Frame", nil, mainFrame); LayoutPanel(auditPanel)
 
-    local onTimeBtn = CreateFrame("Button", nil, raidPanel, "UIPanelButtonTemplate")
-    onTimeBtn:SetSize(200, 30)
-    onTimeBtn:SetPoint("TOP", raidPanel, "TOP", 0, -40)
-    onTimeBtn:SetText("Allocate On Time DKP")
+--------------------------------------------------
+-- RAID LEADER TOOLS PANEL
+--------------------------------------------------
+
+	local onTimeBtn = CreateFrame("Button", nil, raidPanel, "UIPanelButtonTemplate")
+	onTimeBtn:SetSize(200, 30)
+	onTimeBtn:SetPoint("TOP", raidPanel, "TOP", 0, -40)
+	onTimeBtn:SetText("Allocate On Time DKP")
     onTimeBtn:SetScript("OnClick", function()
         if not IsRaidLeaderOrMasterLooter() then
             Print("Only the raid leader or master looter can perform this function.")
             return
         end
         if UsedToday("onTime") then
-            Print("Already allocated today.")
+            Print("You allready did this today, I have ignored duplicate allocation. You may need to manually edit DKP if this was a mistake.")
             return
-        else
-            StaticPopup_Show("REDDKP_ON_TIME_CHECK")
-            MarkUsedToday("onTime")
+		else
+			StaticPopup_Show("REDDKP_ON_TIME_CHECK")
+			MarkUsedToday("onTime")
         end
     end)
 
-    local attendanceBtn = CreateFrame("Button", nil, raidPanel, "UIPanelButtonTemplate")
-    attendanceBtn:SetSize(200, 30)
-    attendanceBtn:SetPoint("TOP", onTimeBtn, "BOTTOM", 0, -20)
-    attendanceBtn:SetText("Allocate Attendance DKP")
-    attendanceBtn:SetScript("OnClick", function()
+	local attendanceBtn = CreateFrame("Button", nil, raidPanel, "UIPanelButtonTemplate")
+	attendanceBtn:SetSize(200, 30)
+	attendanceBtn:SetPoint("TOP", onTimeBtn, "BOTTOM", 0, -20)
+	attendanceBtn:SetText("Allocate Attendance DKP")
+	attendanceBtn:SetScript("OnClick", function()
         if not IsRaidLeaderOrMasterLooter() then
             Print("Only the raid leader or master looter can perform this function.")
             return
         end
         if UsedToday("attendance") then
-            Print("Already allocated today.")
+            Print("You allready did this today, I have ignored duplicate allocation. You may need to manually edit DKP if this was a mistake.")
             return
-        else
-            StaticPopup_Show("REDDKP_ALLOCATE_ATTENDANCE")
-            MarkUsedToday("attendance")
+		else
+			StaticPopup_Show("REDDKP_ALLOCATE_ATTENDANCE")
+			MarkUsedToday("attendance")
         end
+        
     end)
 
-    local newWeekBtn = CreateFrame("Button", nil, raidPanel, "UIPanelButtonTemplate")
-    newWeekBtn:SetSize(200, 30)
-    newWeekBtn:SetPoint("TOP", attendanceBtn, "BOTTOM", 0, -20)
-    newWeekBtn:SetText("Start a New DKP Week")
+	local newWeekBtn = CreateFrame("Button", nil, raidPanel, "UIPanelButtonTemplate")
+	newWeekBtn:SetSize(200, 30)
+	newWeekBtn:SetPoint("TOP", attendanceBtn, "BOTTOM", 0, -20)
+	newWeekBtn:SetText("Start a New DKP Week")
     newWeekBtn:SetScript("OnClick", function()
         if not IsAuthorized() then
             Print("Only editors can start a new DKP week.")
             return
-        else
-            StaticPopup_Show("REDDKP_NEW_WEEK")
+		else
+			StaticPopup_Show("REDDKP_NEW_WEEK")
         end
     end)
 
-    local broadcastBtn = CreateFrame("Button", nil, raidPanel, "UIPanelButtonTemplate")
-    broadcastBtn:SetSize(220, 30)
-    broadcastBtn:SetPoint("BOTTOM", raidPanel, "BOTTOM", 0, 10)
-    broadcastBtn:SetText("Broadcast DKP Table to Raid")
-    broadcastBtn:SetScript("OnClick", function()
-        StaticPopup_Show("REDDKP_BROADCAST_DKP")
-    end)
+	local broadcastBtn = CreateFrame("Button", nil, raidPanel, "UIPanelButtonTemplate")
+	broadcastBtn:SetSize(220, 30)
+	broadcastBtn:SetPoint("BOTTOM", raidPanel, "BOTTOM", 0, 10)
+	broadcastBtn:SetText("Broadcast DKP Table to Raid")
+	broadcastBtn:SetScript("OnClick", function()
+		StaticPopup_Show("REDDKP_BROADCAST_DKP")
+	end)
+
+    --------------------------------------------------
+    -- EDITORS PANEL UI
+    --------------------------------------------------
 
     local title = editorsPanel:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
     title:SetPoint("TOPLEFT", 10, -10)
@@ -579,11 +803,15 @@ local function CreateUI()
     local addBtn = CreateFrame("Button", nil, editorsPanel, "UIPanelButtonTemplate")
     addBtn:SetSize(80, 22)
     addBtn:SetText("Add")
-    addBtn:SetPoint("LEFT", addBox, "RIGHT", 10, 0)
 
     local removeBtn = CreateFrame("Button", nil, editorsPanel, "UIPanelButtonTemplate")
     removeBtn:SetSize(80, 22)
     removeBtn:SetText("Remove")
+
+    addBtn:ClearAllPoints()
+    addBtn:SetPoint("LEFT", addBox, "RIGHT", 10, 0)
+
+    removeBtn:ClearAllPoints()
     removeBtn:SetPoint("TOPLEFT", addBtn, "BOTTOMLEFT", 0, -8)
 
     local removeNote = editorsPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
@@ -647,6 +875,10 @@ local function CreateUI()
     note:SetPoint("BOTTOMLEFT", editorsPanel, "BOTTOMLEFT", 10, 10)
     note:SetJustifyH("LEFT")
     note:SetText("|cffaaaaaa* Guild leaders are editors by default.|r")
+	
+	--------------------------------------------------
+    -- AUDIT PANEL
+    --------------------------------------------------
 
     local auditScroll = CreateFrame("ScrollFrame", nil, auditPanel, "UIPanelScrollFrameTemplate")
     auditScroll:SetPoint("TOPLEFT", -40, -40)
@@ -674,14 +906,24 @@ local function CreateUI()
     end
 
     auditPanel:SetScript("OnShow", UpdateAuditLog)
+	
 
+    --------------------------------------------------
+    -- SYNC WARNING BANNER (always visible until sync)
+    --------------------------------------------------
     syncWarning = dkpPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    syncWarning:SetPoint("BOTTOM", dkpPanel, "BOTTOM", 0, 40)
+    syncWarning:SetPoint("BOTTOM", dkpPanel, "BOTTOM", 0, 35)
     syncWarning:SetTextColor(1, 0.2, 0.2)
+
+    -- Default warning until sync occurs
     SafeSetSyncWarning("WARNING — Your DKP data may be outdated until an editor syncs.")
 
-	local headerY = -50
-	local x = 80
+    --------------------------------------------------
+    -- DKP PANEL: HEADERS
+    --------------------------------------------------
+
+    local headerY = -50
+    local x = 80
     for i, h in ipairs(headers) do
         local headerBtn = CreateFrame("Button", nil, dkpPanel)
         headerBtn:SetPoint("TOPLEFT", dkpPanel, "TOPLEFT", x, headerY)
@@ -723,6 +965,10 @@ local function CreateUI()
     if headerButtons[1] then
         headerButtons[1].text:SetText(SORT_COLOR .. headers[1].text .. "|r")
     end
+
+    --------------------------------------------------
+    -- DKP PANEL: SCROLLABLE ROWS
+    --------------------------------------------------
 
     scroll = CreateFrame("ScrollFrame", nil, dkpPanel, "UIPanelScrollFrameTemplate")
     scroll:SetPoint("TOPLEFT", dkpPanel, "TOPLEFT", 50, headerY - 25)
@@ -775,6 +1021,10 @@ local function CreateUI()
 
     scrollChild:SetHeight(MAX_ROWS * ROW_HEIGHT)
 
+    --------------------------------------------------
+    -- INLINE EDIT BOX
+    --------------------------------------------------
+
     inlineEdit = CreateFrame("EditBox", nil, dkpPanel, "InputBoxTemplate")
     inlineEdit:SetAutoFocus(true)
     inlineEdit:SetSize(80, 18)
@@ -805,6 +1055,10 @@ local function CreateUI()
             self.currentFS = nil
         end
     end)
+
+    --------------------------------------------------
+    -- ROW INTERACTION (EDIT, DELETE, WHISPER)
+    --------------------------------------------------
 
     for _, row in ipairs(rows) do
         local delBtn = row.deleteButton
@@ -865,6 +1119,10 @@ local function CreateUI()
                         local num = tonumber(newValue)
                         if not num then return end
 
+                        if num == 69 then
+                            print("|cff00ff00Nice!|r")
+                        end
+
                         local player = inlineEdit.editPlayer
                         local field  = inlineEdit.editField
                         local d = RedDKP_Data[player]
@@ -916,6 +1174,10 @@ local function CreateUI()
         end
     end
 
+    --------------------------------------------------
+    -- DKP PANEL: ADD NEW RECORD
+    --------------------------------------------------
+
     local addInput = CreateFrame("EditBox", nil, dkpPanel, "InputBoxTemplate")
     addInput:SetSize(140, 20)
     addInput:SetPoint("BOTTOMLEFT", dkpPanel, "BOTTOMLEFT", 20, 10)
@@ -933,9 +1195,7 @@ local function CreateUI()
         end
 
         local name = addInput:GetText():gsub("%s+", "")
-        if name == "" then 
-			return 
-		end
+        if name == "" then return end
 
         local upper = string.upper(name)
         for existingName in pairs(RedDKP_Data) do
@@ -965,27 +1225,34 @@ local function CreateUI()
         Print("Added DKP record for " .. name)
     end)
 
+    --------------------------------------------------
+    -- DKP PANEL: SYNC + RECALCULATE BUTTONS
+    --------------------------------------------------
+
     local requestBtn = CreateFrame("Button", nil, dkpPanel, "UIPanelButtonTemplate")
     requestBtn:SetSize(120, 24)
     requestBtn:SetText("Request SYNC")
     requestBtn:SetPoint("BOTTOMRIGHT", dkpPanel, "BOTTOMRIGHT", -10, 10)
     requestBtn:SetScript("OnClick", function()
-        local best = GetHighestRankEditor()
-        if not best then
-            Print("No editor online.")
+        if not IsAuthorized() then
+            Print("Requesting SYNC from authorised user.")
             return
         end
-        C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "REQUEST:" .. UnitName("player"), "WHISPER", best)
-        Print("Requested sync from " .. best)
     end)
 
-    local forceBtn = CreateFrame("Button", nil, dkpPanel, "UIPanelButtonTemplate")
-    forceBtn:SetSize(120, 24)
-    forceBtn:SetText("FORCE Sync")
-    forceBtn:SetPoint("RIGHT", requestBtn, "LEFT", -10, 0)
-    forceBtn:SetScript("OnClick", function()
-        if not IsAuthorized() then return end
-        StaticPopup_Show("REDDKP_FORCE_SYNC")
+	local forceBtn = CreateFrame("Button", nil, dkpPanel, "UIPanelButtonTemplate")
+	forceBtn:SetSize(120, 24)
+	forceBtn:SetText("FORCE Sync")
+	forceBtn:SetPoint("RIGHT", requestBtn, "LEFT", -10, 0)
+	forceBtn:SetScript("OnClick", function()
+    	if not IsAuthorized() then
+			forceBtn:Hide()
+		elseif IsAuthorized() then
+			forceBtn:Show()
+			BroadcastDKPTable()
+			Print("Sending YOUR data to ALL addon users in Guild")
+            return
+        end
     end)
 
     RecalculateAllBalances()
@@ -993,8 +1260,27 @@ local function CreateUI()
     ShowTab(TAB_DKP)
 end
 
+
+--------------------------------------------------
+-- SYNC SYSTEM
+--------------------------------------------------
+
+-- Serialize helpers (LibSerialize + LibDeflate required)
 local LibSerialize = LibStub("LibSerialize")
 local LibDeflate   = LibStub("LibDeflate")
+
+-- Test the are loaded
+if not LibSerialize then
+    print("RedDKP WARNING: LibSerialize not loaded")
+end
+
+if not LibDeflate then
+    print("RedDKP WARNING: LibDeflate not loaded")
+end
+
+--------------------------------------------------
+-- BUILD SYNC PAYLOAD
+--------------------------------------------------
 
 local function BuildSyncPayload()
     return {
@@ -1022,15 +1308,39 @@ local function DecodePayload(data)
     return tbl
 end
 
+--------------------------------------------------
+-- FIND BEST EDITOR (highest rank)
+--------------------------------------------------
+
+local function GetHighestRankEditor()
+	EnsureOnlineEditors()
+    local bestName = nil
+    local bestRank = 99
+
+    for name, rank in pairs(RedDKP_Config.onlineEditors) do
+        if rank < bestRank then
+            bestRank = rank
+            bestName = name
+        end
+    end
+
+    return bestName
+end
+
+--------------------------------------------------
+-- AUTO-SYNC FOR NON-EDITORS
+--------------------------------------------------
+
 local function AttemptAutoSync()
     EnsureAddonUsers()
-    EnsureOnlineEditors()
-
+	EnsureOnlineEditors()
     if IsAuthorized() then
+        -- Editor: show editor warning
         SafeSetSyncWarning("WARNING — Editor data does NOT auto-sync. You must sync manually.")
         return
     end
 
+    -- Non-editor: attempt auto-sync
     UpdateOnlineEditors()
     local bestEditor = GetHighestRankEditor()
 
@@ -1039,80 +1349,64 @@ local function AttemptAutoSync()
         return
     end
 
-    C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "REQUEST:" .. UnitName("player"), "WHISPER", bestEditor)
+    -- Request sync from best editor
+    local payload = BuildSyncPayload()
+    local encoded = EncodePayload(payload)
+
+    C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "REQUEST:" .. encoded, "WHISPER", bestEditor)
     Print("Requesting automatic sync from " .. bestEditor .. "...")
 end
 
-StaticPopupDialogs["REDDKP_SYNC_CONFIRM"] = {
-    text = "%s wants to sync DKP data with you. Accept?",
-    button1 = "Accept",
-    button2 = "Decline",
-    OnAccept = function(self, data)
-        C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "ACCEPT:" .. data, "WHISPER", data)
-    end,
-    OnCancel = function(self, data)
-        C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "DECLINE:" .. data, "WHISPER", data)
-        SafeSetSyncWarning("WARNING — You declined sync. Your data may be outdated.")
-    end,
-    timeout = 0,
-    whileDead = true,
-    hideOnEscape = true,
-}
+--------------------------------------------------
+-- HANDLE SYNC REQUEST (incoming)
+--------------------------------------------------
 
-StaticPopupDialogs["REDDKP_FORCE_SYNC"] = {
-    text = "Force sync will overwrite ALL guild DKP with YOUR data. Proceed?",
-    button1 = "Yes",
-    button2 = "No",
-    OnAccept = function()
-        local payload = BuildSyncPayload()
-        local encoded = EncodePayload(payload)
-
-        for name in pairs(RedDKP_Config.addonUsers) do
-            if UnitIsConnected(name) and UnitInGuild(name) then
-                C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "DATA:" .. encoded, "WHISPER", name)
-            end
-        end
-
-        Print("Forced sync sent.")
-    end,
-    timeout = 0,
-    whileDead = true,
-    hideOnEscape = true,
-}
-
-StaticPopupDialogs["REDDKP_DELETE_PLAYER"] = {
-    text = "Delete DKP record for %s?",
-    button1 = "Delete",
-    button2 = "Cancel",
-    OnAccept = function(self, player)
-        RedDKP_Data[player] = nil
-        UpdateTable()
-        Print("Deleted DKP record for " .. player)
-    end,
-    timeout = 0,
-    whileDead = true,
-    hideOnEscape = true,
-}
-
-local function HandleSyncRequest(sender)
+local function HandleSyncRequest(sender, encoded)
     sender = Ambiguate(sender, "short")
+
+    -- Mark sender as addon user
     MarkAddonUserOnline(sender)
 
     if not IsAuthorized() then
+        -- Non-editors auto-accept
         C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "ACCEPT:" .. sender, "WHISPER", sender)
         return
     end
 
-    StaticPopup_Show("REDDKP_SYNC_CONFIRM", sender, nil, sender)
+    -- Editors get popup
+    StaticPopupDialogs["REDDKP_SYNC_CONFIRM"] = {
+        text = sender .. " wants to sync DKP data with you. Accept?",
+        button1 = "Accept",
+        button2 = "Decline",
+        OnAccept = function()
+            C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "ACCEPT:" .. sender, "WHISPER", sender)
+        end,
+        OnCancel = function()
+            C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "DECLINE:" .. sender, "WHISPER", sender)
+            SafeSetSyncWarning("WARNING — You declined sync. Your data may be outdated.")
+        end,
+        timeout = 0,
+        whileDead = true,
+        hideOnEscape = true,
+    }
+
+    StaticPopup_Show("REDDKP_SYNC_CONFIRM")
 end
+
+--------------------------------------------------
+-- HANDLE SYNC RESPONSE (ACCEPT / DECLINE)
+--------------------------------------------------
 
 local function HandleSyncResponse(sender, msgType)
     sender = Ambiguate(sender, "short")
 
     if msgType == "ACCEPT" then
         Print(sender .. " accepted your sync request.")
+
+        -- Send full data
         local payload = BuildSyncPayload()
         local encoded = EncodePayload(payload)
+
         C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "DATA:" .. encoded, "WHISPER", sender)
         return
     end
@@ -1123,6 +1417,10 @@ local function HandleSyncResponse(sender, msgType)
     end
 end
 
+--------------------------------------------------
+-- APPLY SYNC DATA
+--------------------------------------------------
+
 local function ApplySyncData(sender, encoded)
     sender = Ambiguate(sender, "short")
 
@@ -1132,12 +1430,21 @@ local function ApplySyncData(sender, encoded)
         return
     end
 
+    --------------------------------------------------
+    -- FULL DKP OVERWRITE
+    --------------------------------------------------
     RedDKP_Data = {}
+
     for name, dkpEntry in pairs(payload.dkp) do
         RedDKP_Data[name] = dkpEntry
     end
 
+    --------------------------------------------------
+    -- AUDIT MERGE (Smart Sync ON by default)
+    --------------------------------------------------
+
     if payload.smart then
+        -- Smart sync: only add missing audit entries
         local existing = {}
         for _, entry in ipairs(RedDKP_Audit) do
             existing[entry.id] = true
@@ -1155,11 +1462,15 @@ local function ApplySyncData(sender, encoded)
             from   = sender,
             time   = date("%Y-%m-%d %H:%M:%S"),
         })
+
     else
+        -- Full overwrite
         RedDKP_Audit = {}
+
         for _, entry in ipairs(payload.audit) do
             table.insert(RedDKP_Audit, entry)
         end
+
         table.insert(RedDKP_Audit, {
             id     = GenerateAuditID(),
             type   = "SYNC_ACCEPTED",
@@ -1168,14 +1479,28 @@ local function ApplySyncData(sender, encoded)
         })
     end
 
+    --------------------------------------------------
+    -- Sort audit log
+    --------------------------------------------------
     table.sort(RedDKP_Audit, function(a, b)
         return (a.time or "") > (b.time or "")
     end)
 
+    --------------------------------------------------
+    -- Clear warning banner
+    --------------------------------------------------
     SafeSetSyncWarning("")
+
+    --------------------------------------------------
+    -- Refresh UI
+    --------------------------------------------------
     UpdateTable()
     Print("Sync completed from " .. sender)
 end
+
+--------------------------------------------------
+-- MASTER ADDON MESSAGE HANDLER
+--------------------------------------------------
 
 local function OnSyncAddonMessage(prefix, msg, channel, sender)
     if prefix ~= SYNC_PREFIX then return end
@@ -1186,7 +1511,7 @@ local function OnSyncAddonMessage(prefix, msg, channel, sender)
     sender = Ambiguate(sender, "short")
 
     if cmd == "REQUEST" then
-        HandleSyncRequest(data)
+        HandleSyncRequest(sender, data)
         return
     end
 
@@ -1206,17 +1531,25 @@ local function OnSyncAddonMessage(prefix, msg, channel, sender)
     end
 end
 
+--------------------------------------------------
+-- REGISTER SYNC MESSAGE PREFIX
+--------------------------------------------------
+
 C_ChatInfo.RegisterAddonMessagePrefix(SYNC_PREFIX)
+
+--------------------------------------------------
+-- DKP PANEL: SYNC BUTTON (Final Logic)
+--------------------------------------------------
 
 local function SendSyncToOnlineAddonUsers()
     EnsureAddonUsers()
-    EnsureOnlineEditors()
-
+	EnsureOnlineEditors()
     if not IsAuthorized() then
         Print("Only editors can initiate a sync.")
         return
     end
 
+    -- Refresh online addon user list
     ClearOfflineAddonUsers()
 
     local me = UnitName("player")
@@ -1224,7 +1557,10 @@ local function SendSyncToOnlineAddonUsers()
 
     for name in pairs(RedDKP_Config.addonUsers) do
         if name ~= me and UnitIsConnected(name) and UnitInGuild(name) then
-            C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "REQUEST:" .. me, "WHISPER", name)
+            local payload = BuildSyncPayload()
+            local encoded = EncodePayload(payload)
+
+            C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "REQUEST:" .. encoded, "WHISPER", name)
             sent = sent + 1
         end
     end
@@ -1237,14 +1573,20 @@ local function SendSyncToOnlineAddonUsers()
     Print("Sync request sent to " .. sent .. " guild addon user(s).")
 end
 
+--------------------------------------------------
+-- VERSION MESSAGE HANDLER (also marks addon users)
+--------------------------------------------------
+
 local vf = CreateFrame("Frame")
 vf:RegisterEvent("CHAT_MSG_ADDON")
 vf:SetScript("OnEvent", function(_, _, prefix, message, channel, sender)
     sender = Ambiguate(sender, "short")
 
     if prefix == VERSION_PREFIX then
+        -- Mark sender as addon user
         MarkAddonUserOnline(sender)
 
+        -- Only compare versions from protected editor
         local protected = GetProtectedEditor()
         if sender ~= protected then return end
 
@@ -1255,11 +1597,16 @@ vf:SetScript("OnEvent", function(_, _, prefix, message, channel, sender)
         return
     end
 
+    -- Sync messages handled by master sync handler
     if prefix == SYNC_PREFIX then
         OnSyncAddonMessage(prefix, message, channel, sender)
         return
     end
 end)
+
+--------------------------------------------------
+-- FALLBACK MINIMAP BUTTON
+--------------------------------------------------
 
 local function CreateFallbackMinimapButton()
     local btn = CreateFrame("Button", "RedDKP_MinimapButton", Minimap)
@@ -1330,6 +1677,10 @@ local function CreateFallbackMinimapButton()
     UpdateButtonPosition()
 end
 
+--------------------------------------------------
+-- ADDON LOADED: Initialize + Auto-Sync
+--------------------------------------------------
+
 local f = CreateFrame("Frame")
 f:RegisterEvent("ADDON_LOADED")
 f:RegisterEvent("PLAYER_LOGIN")
@@ -1341,9 +1692,11 @@ f:SetScript("OnEvent", function(_, event, name)
 
         EnsureSaved()
 
+        -- Register prefixes
         C_ChatInfo.RegisterAddonMessagePrefix(VERSION_PREFIX)
         C_ChatInfo.RegisterAddonMessagePrefix(SYNC_PREFIX)
 
+        -- Update class info from guild roster
         if IsInGuild() then
             for i = 1, GetNumGuildMembers() do
                 local gName, _, _, _, _, _, _, _, _, _, gClass = GetGuildRosterInfo(i)
@@ -1364,6 +1717,9 @@ f:SetScript("OnEvent", function(_, event, name)
         return
     end
 
+    --------------------------------------------------
+    -- PLAYER_LOGIN: Broadcast version + auto-sync
+    --------------------------------------------------
     if event == "PLAYER_LOGIN" then
         C_Timer.After(3, function()
             if C_ChatInfo.SendAddonMessage then
@@ -1376,6 +1732,7 @@ f:SetScript("OnEvent", function(_, event, name)
             end
         end)
 
+        -- Delay auto-sync slightly to allow version pings to populate addonUsers
         C_Timer.After(5, function()
             UpdateOnlineEditors()
             AttemptAutoSync()
@@ -1384,129 +1741,11 @@ f:SetScript("OnEvent", function(_, event, name)
         return
     end
 
+    --------------------------------------------------
+    -- GUILD_ROSTER_UPDATE: Track online editors
+    --------------------------------------------------
     if event == "GUILD_ROSTER_UPDATE" then
         UpdateOnlineEditors()
         return
     end
 end)
-
-StaticPopupDialogs["REDDKP_ON_TIME_CHECK"] = {
-    text = "Allocate On-Time DKP to all raid members?",
-    button1 = "Yes",
-    button2 = "No",
-    OnAccept = function()
-        if not IsRaidLeaderOrMasterLooter() then return end
-        for i = 1, GetNumGroupMembers() do
-            local name = GetRaidRosterInfo(i)
-            if name then
-                name = Ambiguate(name, "short")
-                local d = EnsurePlayer(name)
-                local old = d.onTime or 0
-                d.onTime = old + 5
-                d.balance = (d.lastWeek or 0)
-                          + (d.onTime or 0)
-                          + (d.attendance or 0)
-                          + (d.bench or 0)
-                          - (d.spent or 0)
-                LogAudit(name, "onTime", old, d.onTime)
-            end
-        end
-        UpdateTable()
-        Print("On-Time DKP allocated.")
-    end,
-    timeout = 0,
-    whileDead = true,
-    hideOnEscape = true,
-}
-
-StaticPopupDialogs["REDDKP_ALLOCATE_ATTENDANCE"] = {
-    text = "Allocate Attendance DKP to all raid members?",
-    button1 = "Yes",
-    button2 = "No",
-    OnAccept = function()
-        if not IsRaidLeaderOrMasterLooter() then return end
-        for i = 1, GetNumGroupMembers() do
-            local name = GetRaidRosterInfo(i)
-            if name then
-                name = Ambiguate(name, "short")
-                local d = EnsurePlayer(name)
-                local old = d.attendance or 0
-                d.attendance = old + 15
-                d.balance = (d.lastWeek or 0)
-                          + (d.onTime or 0)
-                          + (d.attendance or 0)
-                          + (d.bench or 0)
-                          - (d.spent or 0)
-                LogAudit(name, "attendance", old, d.attendance)
-            end
-        end
-        UpdateTable()
-        Print("Attendance DKP allocated.")
-    end,
-    timeout = 0,
-    whileDead = true,
-    hideOnEscape = true,
-}
-
-StaticPopupDialogs["REDDKP_NEW_WEEK"] = {
-    text = "Start a new DKP week? This will move current totals into LastWeek.",
-    button1 = "Yes",
-    button2 = "No",
-    OnAccept = function()
-        for name, d in pairs(RedDKP_Data) do
-            local oldBalance = d.balance or 0
-
-            d.lastWeek   = oldBalance
-            d.onTime     = 0
-            d.attendance = 0
-            d.bench      = 0
-            d.spent      = 0
-            d.balance = 0
-
-            LogAudit(name, "newWeek", "previous balance: "..oldBalance, "week reset")
-        end
-
-        UpdateTable()
-        Print("A new DKP week has begun.")
-    end,
-    timeout = 0,
-    whileDead = true,
-    hideOnEscape = true,
-}
-
-StaticPopupDialogs["REDDKP_BROADCAST_DKP"] = {
-    text = "Broadcast DKP table to the raid?",
-    button1 = "Yes",
-    button2 = "No",
-    OnAccept = function()
-        if not IsInRaid() then
-            Print("You must be in a raid to broadcast DKP.")
-            return
-        end
-
-        SendChatMessage("Name       Bal  LW  OT  AT  Bench  Spent", "RAID")
-        local names = {}
-        for name in pairs(RedDKP_Data) do
-            table.insert(names, name)
-        end
-        table.sort(names)
-        for _, name in ipairs(names) do
-            local d = EnsurePlayer(name)
-            local msg = string.format(
-                "%-10s %4d %3d %3d %3d %5d %6d",
-                name,
-                d.balance or 0,
-                d.lastWeek or 0,
-                d.onTime or 0,
-                d.attendance or 0,
-                d.bench or 0,
-                d.spent or 0
-            )
-            SendChatMessage(msg, "RAID")
-        end
-        Print("DKP table broadcast to raid.")
-    end,
-    timeout = 0,
-    whileDead = true,
-    hideOnEscape = true,
-}

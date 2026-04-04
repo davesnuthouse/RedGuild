@@ -6,3 +6,6 @@
 ## SavedVariables: RedDKP_Data, RedDKP_Config, RedDKP_Audit
 
 RedDKP.lua
+libs\LibSerialize\LibSerialize.lua
+libs\LibDeflate\LibDeflate.lua
+libs\LibStub\LibStub.lua
