@@ -1,6 +1,6 @@
-Addon is currently in development so multiple errors are expected.
+Addon is currently in prerelease so multiple errors are expected.
 
-Please report these under bugs section.
+Please report these under issues section (full BugSack data would be ideal)
 
 Still to be tested:
 
@@ -17,6 +17,7 @@ Missing functionality I want to add ASAP:
 2. Addon icon and minimap icon of the guild logo
 3. Remove the "tell" buttons and just have it message folks when you click their names? (be tidier and less prone to misclick)
 4. Information on the DKP tab that shows the last time that users data was synced successfully
+5. Support for Minimap hide till mouse over
 
 
 Features to consider for the distant future:
