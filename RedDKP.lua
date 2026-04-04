@@ -873,6 +873,10 @@ local function CreateUI()
         delBtn:SetPoint("LEFT", row, "LEFT", 2, 0)
         delBtn:SetText("X")
         row.deleteButton = delBtn
+		
+		if not IsEditor(UnitName("player")) then
+			row.deleteButton:Hide()
+		end
 
         row.cols = {}
         local colX = 30
@@ -1102,9 +1106,12 @@ local function CreateUI()
     forceBtn:SetSize(120, 24)
     forceBtn:SetText("FORCE Sync")
     forceBtn:SetPoint("RIGHT", requestBtn, "LEFT", -10, 0)
+	if not IsEditor(UnitName("player")) then
+			forceBtn:Hide()
+	end
 	forceBtn:SetScript("OnClick", function()
 		if not IsAuthorized() then return end
-		StaticPopup_Show("REDDKP_FORCE_SYNC_CONFIRM")
+	StaticPopup_Show("REDDKP_FORCE_SYNC_CONFIRM")
 	end)
 
     RecalculateAllBalances()
