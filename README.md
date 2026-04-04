@@ -29,9 +29,11 @@ Known Bugs:
 2. Top row record can show above the window when editing + scrolling
 3. Duplicates on the chat message easteregg
 4. Audit log is back to showing lots of "unknowns" (display issue the data is there)
+5. SYNC be fooked
 
 
 Features to consider for the distant future:
 1. Colour coding in the logs to make them easier to read
 2. More buttons for RL Tools
 3. Full support for DKP bidding
+4. Mass Invite functionality
