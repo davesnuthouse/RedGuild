@@ -20,6 +20,7 @@ Missing functionality I want to add ASAP:
 7. Restore the colours on the dkp table values that showed increases and decreases
 8. A day lock where those buttons only work on raid days at the times we usually use them?
 9. A warning to the RL/ML that they have to allocate Attendance DKP before people leave the group
+10. Restore the chat window commmands
 
 
 
