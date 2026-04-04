@@ -1285,6 +1285,10 @@ end
     addInput:SetSize(140, 20)
     addInput:SetPoint("BOTTOMLEFT", dkpPanel, "BOTTOMLEFT", 20, 10)
     addInput:SetAutoFocus(false)
+	
+	if not IsEditor(UnitName("player")) then
+		addInput:Hide()
+	end
 
 	addInput:HookScript("OnEditFocusGained", function(self)
 		if self._clickCatcher then return end
@@ -1314,7 +1318,9 @@ addInput:SetScript("OnEnterPressed", addInput.ClearFocus)
     addButton:SetSize(100, 22)
     addButton:SetPoint("LEFT", addInput, "RIGHT", 10, 0)
     addButton:SetText("Add")
-
+	if not IsEditor(UnitName("player")) then
+			addButton:Hide()
+	end
     addButton:SetScript("OnClick", function()
         if not IsAuthorized() then
             Print("Only editors can add DKP records.")
