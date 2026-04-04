@@ -27,7 +27,7 @@ Known Bugs:
 1. Addon icon not displaying on the addons list
 2. Top row record can show above the window when editing + scrolling
 3. Duplicates on the chat message easteregg
-4. Audit log is back to showing lots of "unknowns"
+4. Audit log is back to showing lots of "unknowns" (display issue the data is there)
 
 
 Features to consider for the distant future:
