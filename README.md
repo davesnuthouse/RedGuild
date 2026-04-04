@@ -14,10 +14,8 @@ Missing functionality I want to add ASAP:
 1. Cap on weekly ontime, attendance and bench values
 1b. A day lock where those buttons only work on raid days at the times we usually use them?
 1c. A warning to the RL/ML that they have to allocate Attendance DKP before people leave the group
-2. Addon icon and minimap icon of the guild logo
-3. Remove the "tell" buttons and just have it message folks when you click their names? (be tidier and less prone to misclick)
-4. Information on the DKP tab that shows the last time that users data was synced successfully
-5. Support for Minimap hide till mouse over
+2. Remove the "tell" buttons and just have it message folks when you click their names? (be tidier and less prone to misclick)
+3. Information on the DKP tab that shows the last time that users data was synced successfully
 
 
 Features to consider for the distant future:
