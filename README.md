@@ -19,11 +19,13 @@ Missing functionality I want to add ASAP:
 4. Ability for folks to whisper an editor with "what's my DKP?" and get a whisper reply
 5. Convert Minimap button to use Lib so it can hook into minimap addons (sexymap) better
 6. Restore the missing "has rotated" data from the DKP table"
+7. Restore the colours on the dkp table values that showed increases and decreases
 
 
 Known Bugs:
 1. Addon icon not displaying on the addons list
 2. Top row record can show above the window when editing + scrolling
+3. Duplicates on the chat message easteregg
 
 
 Features to consider for the distant future:
