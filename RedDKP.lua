@@ -667,6 +667,12 @@ local function CreateUI()
     mainFrame:SetSize(800, 500)
     mainFrame:SetPoint("CENTER")
     mainFrame:Hide()
+	
+	local headerIcon = mainFrame:CreateTexture(nil, "OVERLAY", nil, 7)
+    headerIcon:SetTexture("Interface\\AddOns\\RedDKP\\media\\RedDKP_Icon256.png")
+    headerIcon:SetSize(128, 128)
+    headerIcon:SetPoint("TOP", mainFrame, "LEFT", 20, 290)
+	
     mainFrame.title = mainFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     mainFrame.title:SetPoint("CENTER", mainFrame.TitleBg, "CENTER", 0, 0)
     mainFrame.title:SetText("RedDKP - brought to you by a clueless idiot called Lunátic")
@@ -756,7 +762,7 @@ local function CreateUI()
     title:SetText("")
 
     local editorScroll = CreateFrame("ScrollFrame", nil, editorsPanel, "UIPanelScrollFrameTemplate")
-    editorScroll:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 10, -30)
+    editorScroll:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 70, -30)
     editorScroll:SetPoint("BOTTOMLEFT", editorsPanel, "BOTTOMLEFT", 0, 30)
     editorScroll:SetWidth(200)
 
@@ -898,8 +904,10 @@ local function CreateUI()
         row:SetPoint("TOPLEFT", 0, -(i-1)*AUDIT_ROW_HEIGHT)
 
         local fs = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        fs:SetPoint("LEFT", 60, 0)
-        fs:SetWidth(740)
+       local offset = 50
+
+		fs:SetPoint("LEFT", offset + 60, 0)
+		fs:SetWidth(740 - offset)
         fs:SetJustifyH("LEFT")
         row.text = fs
 
@@ -1610,9 +1618,19 @@ local function CreateFallbackMinimapButton()
     RedDKP_Config.minimapAngle = RedDKP_Config.minimapAngle or 45
 
     local icon = btn:CreateTexture(nil, "ARTWORK")
-    icon:SetTexture("Interface\\Icons\\INV_Misc_Coin_01")
+    icon:SetTexture("Interface\\AddOns\\RedDKP\\media\\RedDKP_Minimap32.png")
     icon:SetAllPoints(btn)
-    icon:SetMask("Interface\\Minimap\\UI-Minimap-Background")
+
+	btn:SetAlpha(0)
+
+	btn:SetScript("OnEnter", function(self)
+		self:SetAlpha(1)
+	end)
+
+	btn:SetScript("OnLeave", function(self)
+		self:SetAlpha(0)
+	end)
+	
 
     local border = btn:CreateTexture(nil, "OVERLAY")
     border:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
@@ -1674,6 +1692,9 @@ local function CreateFallbackMinimapButton()
 	end)
 
     UpdateButtonPosition()
+	if SexyMap and SexyMap.AddButton then
+    SexyMap:AddButton("RedDKP_MinimapButton")
+end
 end
 
 local f = CreateFrame("Frame")
