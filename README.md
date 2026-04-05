@@ -17,11 +17,10 @@ Missing functionality I want to add ASAP:
 4. Ability for folks to whisper an editor with "what's my DKP?" and get a whisper reply
 5. Convert Minimap button to use Lib so it can hook into minimap addons (sexymap) better
 6. Restore the missing "has rotated" data from the DKP table"
-7. Restore the colours on the dkp table values that showed increases and decreases
+7. (Done) Restore the colours on the dkp table values that showed increases and decreases
 8. A day lock where those buttons only work on raid days at the times we usually use them?
 9. A warning to the RL/ML that they have to allocate Attendance DKP before people leave the group
-10. Restore the chat window commmands
-
+10. Restore the chat window slash commmands
 
 
 Known Bugs:
@@ -30,6 +29,7 @@ Known Bugs:
 3. (Possibly Fixed) Audit log is back to showing lots of "unknowns" (display issue the data is there)
 4. SYNC be fooked
 5. (Partially Fixed) Minimap button being a twat (needs a full rebuild and Lib file)
+
 
 Features to consider for the distant future:
 1. Colour coding in the logs to make them easier to read
