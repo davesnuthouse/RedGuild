@@ -26,9 +26,10 @@ local mainFrame
 local dkpPanel, raidPanel, editorsPanel, auditPanel
 
 local TAB_DKP     = 1
-local TAB_RAID    = 2
-local TAB_EDITORS = 3
-local TAB_AUDIT   = 4
+local TAB_GROUP   = 2
+local TAB_RAID    = 3
+local TAB_EDITORS = 4
+local TAB_AUDIT   = 5
 
 local activeTab = TAB_DKP
 
@@ -355,12 +356,15 @@ function ShowTab(id)
     end
 
     dkpPanel:Hide()
+	groupPanel:Hide()
     raidPanel:Hide()
     editorsPanel:Hide()
     auditPanel:Hide()
 
     if id == TAB_DKP then
         dkpPanel:Show()
+	elseif id == TAB_GROUP then
+        groupPanel:Show()
     elseif id == TAB_RAID then
         raidPanel:Show()
     elseif id == TAB_EDITORS then
@@ -666,6 +670,9 @@ local function RefreshEditorList()
 end
 
 local function CreateUI()
+    --------------------------------------------------------------------
+    -- MAIN FRAME
+    --------------------------------------------------------------------
     mainFrame = CreateFrame("Frame", "RedDKPFrame", UIParent, "BasicFrameTemplateWithInset")
     mainFrame:SetSize(800, 500)
     mainFrame:SetPoint("CENTER")
@@ -687,848 +694,933 @@ local function CreateUI()
     mainFrame:SetScript("OnDragStop", mainFrame.StopMovingOrSizing)
     table.insert(UISpecialFrames, "RedDKPFrame")
 
-    CreateTab(TAB_DKP, "DKP")
+    --------------------------------------------------------------------
+    -- TABS
+    --------------------------------------------------------------------
+    CreateTab(TAB_DKP,   "DKP")
+    CreateTab(TAB_GROUP, "Group Builder") -- visible to everyone
     if IsEditor(UnitName("player")) then
         CreateTab(TAB_RAID,    "RL Tools")
         CreateTab(TAB_EDITORS, "Editors")
         CreateTab(TAB_AUDIT,   "Audit Log")
     end
 
+    --------------------------------------------------------------------
+    -- PANELS
+    --------------------------------------------------------------------
     dkpPanel     = CreateFrame("Frame", nil, mainFrame); LayoutPanel(dkpPanel)
+    groupPanel   = CreateFrame("Frame", nil, mainFrame); LayoutPanel(groupPanel)
     raidPanel    = CreateFrame("Frame", nil, mainFrame); LayoutPanel(raidPanel)
     editorsPanel = CreateFrame("Frame", nil, mainFrame); LayoutPanel(editorsPanel)
     auditPanel   = CreateFrame("Frame", nil, mainFrame); LayoutPanel(auditPanel)
 
-    -- RL Tools
-    local onTimeBtn = CreateFrame("Button", nil, raidPanel, "UIPanelButtonTemplate")
-    onTimeBtn:SetSize(200, 30)
-    onTimeBtn:SetPoint("TOP", raidPanel, "TOP", 0, -40)
-    onTimeBtn:SetText("Allocate On Time DKP")
-    onTimeBtn:SetScript("OnClick", function()
-        if not IsRaidLeaderOrMasterLooter() then
-            Print("Only the raid leader or master looter can perform this function.")
-            return
-        end
-        if UsedToday("onTime") then
-            Print("Already allocated today.")
-            return
-        else
-            StaticPopup_Show("REDDKP_ON_TIME_CHECK")
-            MarkUsedToday("onTime")
-        end
-    end)
-
-    local attendanceBtn = CreateFrame("Button", nil, raidPanel, "UIPanelButtonTemplate")
-    attendanceBtn:SetSize(200, 30)
-    attendanceBtn:SetPoint("TOP", onTimeBtn, "BOTTOM", 0, -20)
-    attendanceBtn:SetText("Allocate Attendance DKP")
-    attendanceBtn:SetScript("OnClick", function()
-        if not IsRaidLeaderOrMasterLooter() then
-            Print("Only the raid leader or master looter can perform this function.")
-            return
-        end
-        if UsedToday("attendance") then
-            Print("Already allocated today.")
-            return
-        else
-            StaticPopup_Show("REDDKP_ALLOCATE_ATTENDANCE")
-            MarkUsedToday("attendance")
-        end
-    end)
-
-    local newWeekBtn = CreateFrame("Button", nil, raidPanel, "UIPanelButtonTemplate")
-    newWeekBtn:SetSize(200, 30)
-    newWeekBtn:SetPoint("TOP", attendanceBtn, "BOTTOM", 0, -20)
-    newWeekBtn:SetText("Start a New DKP Week")
-    newWeekBtn:SetScript("OnClick", function()
-        if not IsAuthorized() then
-            Print("Only editors can start a new DKP week.")
-            return
-        else
-            StaticPopup_Show("REDDKP_NEW_WEEK")
-        end
-    end)
-
-    local broadcastBtn = CreateFrame("Button", nil, raidPanel, "UIPanelButtonTemplate")
-    broadcastBtn:SetSize(220, 30)
-    broadcastBtn:SetPoint("BOTTOM", raidPanel, "BOTTOM", 0, 10)
-    broadcastBtn:SetText("Broadcast DKP Table to Raid")
-    broadcastBtn:SetScript("OnClick", function()
-        StaticPopup_Show("REDDKP_BROADCAST_DKP")
-    end)
-
-    -- Editors panel
-    local title = editorsPanel:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
+--------------------------------------------------------------------
+-- GROUP BUILDER PANEL
+--------------------------------------------------------------------
+do
+    local title = groupPanel:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
     title:SetPoint("TOPLEFT", 10, -10)
     title:SetText("")
 
-    local editorScroll = CreateFrame("ScrollFrame", nil, editorsPanel, "UIPanelScrollFrameTemplate")
-    editorScroll:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 70, -30)
-    editorScroll:SetPoint("BOTTOMLEFT", editorsPanel, "BOTTOMLEFT", 0, 30)
-    editorScroll:SetWidth(200)
+    local scroll = CreateFrame("ScrollFrame", nil, groupPanel, "UIPanelScrollFrameTemplate")
+    scroll:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 50, -20)
+    scroll:SetPoint("BOTTOMRIGHT", groupPanel, "BOTTOMRIGHT", -50, 50)
 
-    local editorContent = CreateFrame("Frame", nil, editorScroll)
-    editorContent:SetWidth(200)
-    editorScroll:SetScrollChild(editorContent)
+    local content = CreateFrame("Frame", nil, scroll)
+    content:SetSize(1, 1)
+    scroll:SetScrollChild(content)
 
-    local EDITOR_ROW_HEIGHT = 18
-    local MAX_EDITOR_ROWS = 20
+    local ROW_HEIGHT = 20
+    groupRows = {}
 
-    editorRows = {}
-
-    for i = 1, MAX_EDITOR_ROWS do
-        local row = CreateFrame("Button", nil, editorContent)
-        row:SetSize(200, EDITOR_ROW_HEIGHT)
-        row:SetPoint("TOPLEFT", 0, -(i-1)*EDITOR_ROW_HEIGHT)
-
-        local hl = row:CreateTexture(nil, "BACKGROUND")
-        hl:SetAllPoints()
-        hl:SetColorTexture(0.2, 0.4, 1, 0.3)
-        hl:Hide()
-        row.highlight = hl
-
-        local fs = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        fs:SetPoint("LEFT", 2, 0)
-        fs:SetJustifyH("LEFT")
-        row.text = fs
-
-        row:SetScript("OnClick", function()
-            editorsPanel.selectedEditor = row.name
-            for _, r in ipairs(editorRows) do
-                if r.highlight then r.highlight:Hide() end
-            end
-            if row.name then
-                row.highlight:Show()
-            end
-        end)
-
-        editorRows[i] = row
+    ----------------------------------------------------------------
+    -- CLASS COLOUR LOOKUP
+    ----------------------------------------------------------------
+    local CLASS_COLORS = {}
+    for class, c in pairs(RAID_CLASS_COLORS) do
+        CLASS_COLORS[class] = string.format("|cff%02x%02x%02x", c.r * 255, c.g * 255, c.b * 255)
     end
 
-    editorContent:SetHeight(MAX_EDITOR_ROWS * EDITOR_ROW_HEIGHT)
-
-    local addBox = CreateFrame("EditBox", nil, editorsPanel, "InputBoxTemplate")
-    addBox:SetSize(140, 20)
-    addBox:SetPoint("TOPLEFT", editorScroll, "TOPRIGHT", 90, 0)
-    addBox:SetAutoFocus(false)
-
-    local addBtn = CreateFrame("Button", nil, editorsPanel, "UIPanelButtonTemplate")
-    addBtn:SetSize(80, 22)
-    addBtn:SetText("Add")
-    addBtn:SetPoint("LEFT", addBox, "RIGHT", 10, 0)
-
-    local removeBtn = CreateFrame("Button", nil, editorsPanel, "UIPanelButtonTemplate")
-    removeBtn:SetSize(80, 22)
-    removeBtn:SetText("Remove")
-    removeBtn:SetPoint("TOPLEFT", addBtn, "BOTTOMLEFT", 0, -8)
-
-    local removeNote = editorsPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    removeNote:SetPoint("TOPLEFT", removeBtn, "BOTTOMLEFT", 0, -4)
-    removeNote:SetText("|cffaaaaaa* select name from list and click to remove|r")
-
-    editorsPanel.selectedEditor = nil
-
-    addBtn:SetScript("OnClick", function()
-		if not (IsGuildOfficer() or IsEditor(UnitName("player"))) then
-			Print("Only guild leaders, officers, or editors can modify the editor list.")
-			return
-		end
-        local name = addBox:GetText():gsub("%s+", "")
-        if name == "" then return end
-        EnsureSaved()
-        RedDKP_Config.authorizedEditors[name] = true
-        RedDKP_Config.editorListVersion = (RedDKP_Config.editorListVersion or 0) + 1
-        addBox:SetText("")
-        RefreshEditorList()
-        BroadcastEditorList()
-    end)
-
-    removeBtn:SetScript("OnClick", function()
-        if not IsGuildOfficer() then
-            Print("Only guild officers can modify the editor list.")
-            return
-        end
-
-        local name = editorsPanel.selectedEditor
-        if not name then return end
-
-        local guildLeader = GetGuildLeader()
-        local fallback = UnitName("player")
-
-        if (guildLeader and name == guildLeader) or (not guildLeader and name == fallback) then
-            Print("You cannot remove the protected editor: " .. name)
-            return
-        end
-
-        EnsureSaved()
-        RedDKP_Config.authorizedEditors[name] = nil
-        RedDKP_Config.editorListVersion = (RedDKP_Config.editorListVersion or 0) + 1
-        editorsPanel.selectedEditor = nil
-        RefreshEditorList()
-        BroadcastEditorList()
-    end)
-
-    editorsPanel:SetScript("OnShow", function()
-        C_Timer.After(0.05, RefreshEditorList)
-        if not IsGuildOfficer() then
-            addBox:Hide()
-            addBtn:Hide()
-            removeBtn:Hide()
-            removeNote:Hide()
-        else
-            addBox:Show()
-            addBtn:Show()
-            removeBtn:Show()
-            removeNote:Show()
-        end
-    end)
-
-    local note = editorsPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    note:SetPoint("BOTTOMLEFT", editorsPanel, "BOTTOMLEFT", 10, 10)
-    note:SetJustifyH("LEFT")
-    note:SetText("|cffaaaaaa* Guild leaders are editors by default.|r")
-
-    -- Audit panel
-    local auditScroll = CreateFrame("ScrollFrame", nil, auditPanel, "UIPanelScrollFrameTemplate")
-    auditScroll:SetPoint("TOPLEFT", -40, -40)
-    auditScroll:SetPoint("BOTTOMRIGHT", -40, 25)
-
-    local auditContent = CreateFrame("Frame", nil, auditScroll)
-    auditContent:SetSize(1, 1)
-    auditScroll:SetScrollChild(auditContent)
-
-    local MAX_AUDIT_ROWS = 666
-    local AUDIT_ROW_HEIGHT = 18
-
-    auditRows = {}
-
-    for i = 1, MAX_AUDIT_ROWS do
-        local row = CreateFrame("Frame", nil, auditContent)
-        row:SetSize(1, AUDIT_ROW_HEIGHT)
-        row:SetPoint("TOPLEFT", 0, -(i-1)*AUDIT_ROW_HEIGHT)
-
-        local fs = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        local offset = 50
-
-        fs:SetPoint("LEFT", offset + 60, 0)
-        fs:SetWidth(740 - offset)
-        fs:SetJustifyH("LEFT")
-        row.text = fs
-
-        auditRows[i] = row
-    end
-
-    auditPanel:SetScript("OnShow", UpdateAuditLog)
-
-    syncWarning = dkpPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    syncWarning:SetPoint("BOTTOM", dkpPanel, "BOTTOM", 0, 40)
-    syncWarning:SetTextColor(1, 0.2, 0.2)
-    SafeSetSyncWarning("WARNING — Your DKP data may be outdated until an editor syncs.")
-
-    -- DKP table
-    local headerY = -55
-    local x = 60
-    for i, h in ipairs(headers) do
-        local headerBtn = CreateFrame("Button", nil, dkpPanel)
-        headerBtn:SetPoint("TOPLEFT", dkpPanel, "TOPLEFT", x, headerY)
-        headerBtn:SetSize(h.width, 16)
-
-        local fs = headerBtn:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        fs:SetAllPoints()
-        fs:SetJustifyH("LEFT")
-        fs:SetText(NORMAL_COLOR .. h.text .. "|r")
-        headerBtn.text = fs
-
-        headerBtn:SetScript("OnClick", function()
-            local field = fieldMap[i]
-            if not field or field == "whisper" then return end
-
-            if currentSortField == field then
-                currentSortAscending = not currentSortAscending
-            else
-                currentSortField = field
-                currentSortAscending = false
+    ----------------------------------------------------------------
+    -- ONLINE CHECK (returns true/false)
+    ----------------------------------------------------------------
+    local function IsPlayerOnline(name)
+        -- Check raid first
+        for i = 1, GetNumGroupMembers() do
+            local unit = "raid"..i
+            if UnitExists(unit) and UnitName(unit) == name then
+                return UnitIsConnected(unit)
             end
+        end
 
-            for j, hh in ipairs(headers) do
-                local btn = headerButtons[j]
-                if j == i then
-                    btn.text:SetText(SORT_COLOR .. hh.text .. "|r")
-                else
-                    btn.text:SetText(NORMAL_COLOR .. hh.text .. "|r")
+        -- Check party
+        for i = 1, GetNumSubgroupMembers() do
+            local unit = "party"..i
+            if UnitExists(unit) and UnitName(unit) == name then
+                return UnitIsConnected(unit)
+            end
+        end
+
+        -- Check self
+        if UnitName("player") == name then
+            return UnitIsConnected("player")
+        end
+
+        -- Check guild roster
+        if IsInGuild() then
+            for i = 1, GetNumGuildMembers() do
+                local gName, _, _, _, _, _, _, _, online = GetGuildRosterInfo(i)
+                if gName and Ambiguate(gName, "short") == name then
+                    return online
                 end
             end
+        end
 
-            UpdateTable()
+        return false
+    end
+
+    ----------------------------------------------------------------
+    -- REFRESH LIST
+    ----------------------------------------------------------------
+    local function RefreshGroupBuilder()
+        for _, row in ipairs(groupRows) do
+            row:Hide()
+        end
+        wipe(groupRows)
+
+        local names = {}
+        for name in pairs(RedDKP_Data) do
+            table.insert(names, name)
+        end
+        table.sort(names)
+
+        local i = 0
+        for _, name in ipairs(names) do
+            i = i + 1
+            local row = groupRows[i]
+
+            if not row then
+                row = CreateFrame("Frame", nil, content)
+                row:SetSize(300, ROW_HEIGHT)
+
+                local cb = CreateFrame("CheckButton", nil, row, "ChatConfigCheckButtonTemplate")
+                cb:SetPoint("LEFT", 0, 0)
+                cb:SetSize(20, 20)
+                row.checkbox = cb
+
+                local fs = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+                fs:SetPoint("LEFT", cb, "RIGHT", 5, 0)
+                row.nameFS = fs
+
+                groupRows[i] = row
+            end
+
+            row:SetPoint("TOPLEFT", 10, -(i - 1) * ROW_HEIGHT)
+            row.name = name
+
+            -- class colour
+            local class = RedDKP_Data[name].class
+            local colour = CLASS_COLORS[class] or "|cffffffff"
+
+            -- online check
+            local online = IsPlayerOnline(name)
+            local offlineText = online and "" or " |cffaaaaaa(offline)|r"
+
+            row.nameFS:SetText(colour .. name .. "|r" .. offlineText)
+            row.checkbox:SetChecked(false)
+            row:Show()
+        end
+
+        content:SetHeight(i * ROW_HEIGHT)
+    end
+
+    ----------------------------------------------------------------
+    -- 10-SECOND ONLINE SCAN WHILE TAB IS OPEN
+    ----------------------------------------------------------------
+    local scanTicker = nil
+
+    local function StartOnlineScan()
+        if scanTicker then return end
+        scanTicker = C_Timer.NewTicker(10, RefreshGroupBuilder)
+    end
+
+    local function StopOnlineScan()
+        if scanTicker then
+            scanTicker:Cancel()
+            scanTicker = nil
+        end
+    end
+
+    ----------------------------------------------------------------
+    -- INVITE BUTTON
+    ----------------------------------------------------------------
+    local inviteBtn = CreateFrame("Button", nil, groupPanel, "UIPanelButtonTemplate")
+    inviteBtn:SetSize(140, 24)
+    inviteBtn:SetText("Invite to Group")
+    inviteBtn:SetPoint("BOTTOMRIGHT", groupPanel, "BOTTOMRIGHT", -10, 10)
+
+    inviteBtn:SetScript("OnClick", function()
+        local selected = {}
+
+        for _, row in ipairs(groupRows) do
+            if row:IsShown() and row.checkbox:GetChecked() then
+                table.insert(selected, row.name)
+            end
+        end
+
+        if #selected == 0 then
+            Print("No players selected.")
+            return
+        end
+
+        local numGroup = GetNumGroupMembers()
+        local isRaid = IsInRaid()
+
+        if #selected + numGroup > 4 and not isRaid then
+            C_PartyInfo.ConvertToRaid()
+        end
+
+        for _, name in ipairs(selected) do
+            if not UnitInParty(name) and not UnitInRaid(name) then
+                C_PartyInfo.InviteUnit(name)
+            end
+        end
+    end)
+
+    ----------------------------------------------------------------
+    -- INFO TEXT (BOTTOM LEFT)
+    ----------------------------------------------------------------
+    local info = groupPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+info:SetPoint("BOTTOMLEFT", groupPanel, "BOTTOMLEFT", 10, 10)
+info:SetJustifyH("LEFT")
+info:SetText("|cffaaaaaa*This list is populated from the DKP table and scans every 10 seconds (with the tab open) to check who's online.|r")
+
+    ----------------------------------------------------------------
+    -- PANEL SHOW/HIDE HANDLERS
+    ----------------------------------------------------------------
+    groupPanel:SetScript("OnShow", function()
+        RefreshGroupBuilder()
+        StartOnlineScan()
+    end)
+
+    groupPanel:SetScript("OnHide", function()
+        StopOnlineScan()
+    end)
+end
+
+    --------------------------------------------------------------------
+    -- RL TOOLS PANEL
+    --------------------------------------------------------------------
+    do
+        local onTimeBtn = CreateFrame("Button", nil, raidPanel, "UIPanelButtonTemplate")
+        onTimeBtn:SetSize(200, 30)
+        onTimeBtn:SetPoint("TOP", raidPanel, "TOP", 0, -40)
+        onTimeBtn:SetText("Allocate On Time DKP")
+        onTimeBtn:SetScript("OnClick", function()
+            if not IsRaidLeaderOrMasterLooter() then
+                Print("Only the raid leader or master looter can perform this function.")
+                return
+            end
+            if UsedToday("onTime") then
+                Print("Already allocated today.")
+                return
+            end
+            StaticPopup_Show("REDDKP_ON_TIME_CHECK")
+            MarkUsedToday("onTime")
         end)
 
-        headerButtons[i] = headerBtn
-        x = x + h.width + 5
+        local attendanceBtn = CreateFrame("Button", nil, raidPanel, "UIPanelButtonTemplate")
+        attendanceBtn:SetSize(200, 30)
+        attendanceBtn:SetPoint("TOP", onTimeBtn, "BOTTOM", 0, -20)
+        attendanceBtn:SetText("Allocate Attendance DKP")
+        attendanceBtn:SetScript("OnClick", function()
+            if not IsRaidLeaderOrMasterLooter() then
+                Print("Only the raid leader or master looter can perform this function.")
+                return
+            end
+            if UsedToday("attendance") then
+                Print("Already allocated today.")
+                return
+            end
+            StaticPopup_Show("REDDKP_ALLOCATE_ATTENDANCE")
+            MarkUsedToday("attendance")
+        end)
+
+        local newWeekBtn = CreateFrame("Button", nil, raidPanel, "UIPanelButtonTemplate")
+        newWeekBtn:SetSize(200, 30)
+        newWeekBtn:SetPoint("TOP", attendanceBtn, "BOTTOM", 0, -20)
+        newWeekBtn:SetText("Start a New DKP Week")
+        newWeekBtn:SetScript("OnClick", function()
+            if not IsAuthorized() then
+                Print("Only editors can start a new DKP week.")
+                return
+            end
+            StaticPopup_Show("REDDKP_NEW_WEEK")
+        end)
+
+        local broadcastBtn = CreateFrame("Button", nil, raidPanel, "UIPanelButtonTemplate")
+        broadcastBtn:SetSize(220, 30)
+        broadcastBtn:SetPoint("BOTTOM", raidPanel, "BOTTOM", 0, 10)
+        broadcastBtn:SetText("Broadcast DKP Table to Raid")
+        broadcastBtn:SetScript("OnClick", function()
+            StaticPopup_Show("REDDKP_BROADCAST_DKP")
+        end)
     end
 
-    if headerButtons[1] then
-        headerButtons[1].text:SetText(SORT_COLOR .. headers[1].text .. "|r")
+    --------------------------------------------------------------------
+    -- EDITORS PANEL
+    --------------------------------------------------------------------
+    do
+        local title = editorsPanel:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
+        title:SetPoint("TOPLEFT", 10, -10)
+        title:SetText("")
+
+        local editorScroll = CreateFrame("ScrollFrame", nil, editorsPanel, "UIPanelScrollFrameTemplate")
+        editorScroll:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 70, -30)
+        editorScroll:SetPoint("BOTTOMLEFT", editorsPanel, "BOTTOMLEFT", 0, 30)
+        editorScroll:SetWidth(200)
+
+        local editorContent = CreateFrame("Frame", nil, editorScroll)
+        editorContent:SetWidth(200)
+        editorScroll:SetScrollChild(editorContent)
+
+        local EDITOR_ROW_HEIGHT = 18
+        local MAX_EDITOR_ROWS = 20
+
+        editorRows = {}
+
+        for i = 1, MAX_EDITOR_ROWS do
+            local row = CreateFrame("Button", nil, editorContent)
+            row:SetSize(200, EDITOR_ROW_HEIGHT)
+            row:SetPoint("TOPLEFT", 0, -(i - 1) * EDITOR_ROW_HEIGHT)
+
+            local hl = row:CreateTexture(nil, "BACKGROUND")
+            hl:SetAllPoints()
+            hl:SetColorTexture(0.2, 0.4, 1, 0.3)
+            hl:Hide()
+            row.highlight = hl
+
+            local fs = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+            fs:SetPoint("LEFT", 2, 0)
+            fs:SetJustifyH("LEFT")
+            row.text = fs
+
+            row:SetScript("OnClick", function()
+                editorsPanel.selectedEditor = row.name
+                for _, r in ipairs(editorRows) do
+                    if r.highlight then r.highlight:Hide() end
+                end
+                if row.name then
+                    row.highlight:Show()
+                end
+            end)
+
+            editorRows[i] = row
+        end
+
+        editorContent:SetHeight(MAX_EDITOR_ROWS * EDITOR_ROW_HEIGHT)
+
+        local addBox = CreateFrame("EditBox", nil, editorsPanel, "InputBoxTemplate")
+        addBox:SetSize(140, 20)
+        addBox:SetPoint("TOPLEFT", editorScroll, "TOPRIGHT", 90, 0)
+        addBox:SetAutoFocus(false)
+
+        local addBtn = CreateFrame("Button", nil, editorsPanel, "UIPanelButtonTemplate")
+        addBtn:SetSize(80, 22)
+        addBtn:SetText("Add")
+        addBtn:SetPoint("LEFT", addBox, "RIGHT", 10, 0)
+
+        local removeBtn = CreateFrame("Button", nil, editorsPanel, "UIPanelButtonTemplate")
+        removeBtn:SetSize(80, 22)
+        removeBtn:SetText("Remove")
+        removeBtn:SetPoint("TOPLEFT", addBtn, "BOTTOMLEFT", 0, -8)
+
+        local removeNote = editorsPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        removeNote:SetPoint("TOPLEFT", removeBtn, "BOTTOMLEFT", 0, -4)
+        removeNote:SetText("|cffaaaaaa* select name from list and click to remove|r")
+
+        editorsPanel.selectedEditor = nil
+
+        addBtn:SetScript("OnClick", function()
+            if not (IsGuildOfficer() or IsEditor(UnitName("player"))) then
+                Print("Only guild leaders, officers, or editors can modify the editor list.")
+                return
+            end
+            local name = addBox:GetText():gsub("%s+", "")
+            if name == "" then return end
+            EnsureSaved()
+            RedDKP_Config.authorizedEditors[name] = true
+            RedDKP_Config.editorListVersion = (RedDKP_Config.editorListVersion or 0) + 1
+            addBox:SetText("")
+            RefreshEditorList()
+            BroadcastEditorList()
+        end)
+
+        removeBtn:SetScript("OnClick", function()
+            if not IsGuildOfficer() then
+                Print("Only guild officers can modify the editor list.")
+                return
+            end
+
+            local name = editorsPanel.selectedEditor
+            if not name then return end
+
+            local guildLeader = GetGuildLeader()
+            local fallback = UnitName("player")
+
+            if (guildLeader and name == guildLeader) or (not guildLeader and name == fallback) then
+                Print("You cannot remove the protected editor: " .. name)
+                return
+            end
+
+            EnsureSaved()
+            RedDKP_Config.authorizedEditors[name] = nil
+            RedDKP_Config.editorListVersion = (RedDKP_Config.editorListVersion or 0) + 1
+            editorsPanel.selectedEditor = nil
+            RefreshEditorList()
+            BroadcastEditorList()
+        end)
+
+        editorsPanel:SetScript("OnShow", function()
+            C_Timer.After(0.05, RefreshEditorList)
+            if not IsGuildOfficer() then
+                addBox:Hide()
+                addBtn:Hide()
+                removeBtn:Hide()
+                removeNote:Hide()
+            else
+                addBox:Show()
+                addBtn:Show()
+                removeBtn:Show()
+                removeNote:Show()
+            end
+        end)
+
+        local note = editorsPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        note:SetPoint("BOTTOMLEFT", editorsPanel, "BOTTOMLEFT", 10, 10)
+        note:SetJustifyH("LEFT")
+        note:SetText("|cffaaaaaa* Guild leaders are editors by default.|r")
     end
 
-    scroll = CreateFrame("ScrollFrame", nil, dkpPanel, "UIPanelScrollFrameTemplate")
-    scroll:SetPoint("TOPLEFT", dkpPanel, "TOPLEFT", 30, headerY - 20)
-    scroll:SetPoint("BOTTOMRIGHT", dkpPanel, "BOTTOMRIGHT", -30, 60)
+    --------------------------------------------------------------------
+    -- AUDIT PANEL
+    --------------------------------------------------------------------
+    do
+        local auditScroll = CreateFrame("ScrollFrame", nil, auditPanel, "UIPanelScrollFrameTemplate")
+        auditScroll:SetPoint("TOPLEFT", -40, -40)
+        auditScroll:SetPoint("BOTTOMRIGHT", -40, 25)
 
-    local sb = scroll.ScrollBar
-    if sb then
-        sb:ClearAllPoints()
-        sb:SetPoint("TOPRIGHT", scroll, "TOPRIGHT", -5, -18)
-        sb:SetPoint("BOTTOMRIGHT", scroll, "BOTTOMRIGHT", -20, 16)
+        local auditContent = CreateFrame("Frame", nil, auditScroll)
+        auditContent:SetSize(1, 1)
+        auditScroll:SetScrollChild(auditContent)
+
+        local MAX_AUDIT_ROWS = 666
+        local AUDIT_ROW_HEIGHT = 18
+
+        auditRows = {}
+
+        for i = 1, MAX_AUDIT_ROWS do
+            local row = CreateFrame("Frame", nil, auditContent)
+            row:SetSize(1, AUDIT_ROW_HEIGHT)
+            row:SetPoint("TOPLEFT", 0, -(i - 1) * AUDIT_ROW_HEIGHT)
+
+            local fs = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+            local offset = 50
+
+            fs:SetPoint("LEFT", offset + 60, 0)
+            fs:SetWidth(740 - offset)
+            fs:SetJustifyH("LEFT")
+            row.text = fs
+
+            auditRows[i] = row
+        end
+
+        auditPanel:SetScript("OnShow", UpdateAuditLog)
     end
 
-    scrollChild = CreateFrame("Frame", nil, scroll)
-    scrollChild:SetSize(1, 1)
-    scroll:SetScrollChild(scrollChild)
+    --------------------------------------------------------------------
+    -- DKP TABLE
+    --------------------------------------------------------------------
+    do
+        syncWarning = dkpPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        syncWarning:SetPoint("BOTTOM", dkpPanel, "BOTTOM", 0, 40)
+        syncWarning:SetTextColor(1, 0.2, 0.2)
+        SafeSetSyncWarning("WARNING — Your DKP data may be outdated until an editor syncs.")
 
-    local MAX_ROWS = 666
-    local ROW_HEIGHT = 18
+        local headerY = -55
+        local x = 60
+        headerButtons = headerButtons or {}
 
-    rows = {}
+        for i, h in ipairs(headers) do
+            local headerBtn = CreateFrame("Button", nil, dkpPanel)
+            headerBtn:SetPoint("TOPLEFT", dkpPanel, "TOPLEFT", x, headerY)
+            headerBtn:SetSize(h.width, 16)
 
-    for i = 1, MAX_ROWS do
-		local row = CreateFrame("Frame", nil, scrollChild)
-		row:SetSize(1, ROW_HEIGHT)
-		row:SetPoint("TOPLEFT", 0, -(i-1)*ROW_HEIGHT)
+            local fs = headerBtn:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            fs:SetAllPoints()
+            fs:SetJustifyH("LEFT")
+            fs:SetText(NORMAL_COLOR .. h.text .. "|r")
+            headerBtn.text = fs
 
-		local bg = row:CreateTexture(nil, "BACKGROUND")
-		bg:SetAllPoints()
-		bg:SetColorTexture(0, 0, 0, 0.15)
-		row.bg = bg
+            headerBtn:SetScript("OnClick", function()
+                local field = fieldMap[i]
+                if not field or field == "whisper" then return end
 
-		local delBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
-		delBtn:SetSize(15, 15)
-		delBtn:SetPoint("LEFT", row, "LEFT", 2, 0)
-		delBtn:SetText("X")
-		row.deleteButton = delBtn
+                if currentSortField == field then
+                    currentSortAscending = not currentSortAscending
+                else
+                    currentSortField = field
+                    currentSortAscending = false
+                end
 
-		if not IsEditor(UnitName("player")) then
-			row.deleteButton:Hide()
-		end
-
-		row.cols = {}
-		local colX = 30
-
-		for j, h in ipairs(headers) do
-    local field = fieldMap[j]
-
-    ---------------------------------------------------------
-    -- 1. NAME COLUMN (editable)
-    ---------------------------------------------------------
-    if field == "name" then
-        local nameFS = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        nameFS:SetPoint("LEFT", row, "LEFT", colX, 0)
-        nameFS:SetWidth(h.width)
-        nameFS:SetJustifyH("LEFT")
-        nameFS:EnableMouse(true)
-        row.cols[j] = nameFS
-
-        local nameEB = CreateFrame("EditBox", nil, row, "InputBoxTemplate")
-        nameEB:SetAutoFocus(false)
-        nameEB:SetSize(h.width, 18)
-        nameEB:SetPoint("LEFT", row, "LEFT", colX, 0)
-        nameEB:SetFontObject("GameFontHighlightSmall")
-        nameEB:Hide()
-        row.nameEB = nameEB
-
-        nameFS:SetScript("OnMouseDown", function(self, button)
-            if button ~= "LeftButton" then return end
-            if not IsAuthorized() then return end
-
-            local player = sortedNames[row.index]
-            if not player then return end
-
-            nameEB:SetText(player)
-            nameEB:Show()
-            nameEB:SetFocus()
-            nameFS:Hide()
-
-            nameEB:SetScript("OnEnterPressed", function()
-                local new = nameEB:GetText():gsub("^%s*(.-)%s*$", "%1")
-                if new ~= "" and new ~= player then
-                    if RedDKP_Data[new] then
-                        Print("|cffff5555A player with that name already exists.|r")
+                for j, hh in ipairs(headers) do
+                    local btn = headerButtons[j]
+                    if j == i then
+                        btn.text:SetText(SORT_COLOR .. hh.text .. "|r")
                     else
-                        RedDKP_Data[new] = RedDKP_Data[player]
-                        RedDKP_Data[player] = nil
-                        LogAudit(new, "RENAME_PLAYER", player, new)
+                        btn.text:SetText(NORMAL_COLOR .. hh.text .. "|r")
                     end
                 end
-                nameEB:ClearFocus()
-            end)
 
-            nameEB:SetScript("OnEscapePressed", function()
-                nameEB:ClearFocus()
-            end)
-
-            nameEB:SetScript("OnEditFocusLost", function()
-                nameEB:Hide()
-                nameFS:Show()
                 UpdateTable()
             end)
-        end)
 
-    ---------------------------------------------------------
-    -- 2. ROTATED COLUMN (toggle)
-    ---------------------------------------------------------
-    elseif field == "rotated" then
-        local fs = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        fs:SetPoint("LEFT", row, "LEFT", colX, 0)
-        fs:SetWidth(h.width)
-        fs:SetJustifyH("LEFT")
-        fs:EnableMouse(true)
-        row.cols[j] = fs
+            headerButtons[i] = headerBtn
+            x = x + h.width + 5
+        end
 
-        fs:SetScript("OnMouseDown", function(self, button)
-            if button ~= "LeftButton" then return end
-            if not IsAuthorized() then return end
+        if headerButtons[1] then
+            headerButtons[1].text:SetText(SORT_COLOR .. headers[1].text .. "|r")
+        end
 
-            local player = sortedNames[row.index]
-            if not player then return end
+        local scroll = CreateFrame("ScrollFrame", nil, dkpPanel, "UIPanelScrollFrameTemplate")
+        scroll:SetPoint("TOPLEFT", dkpPanel, "TOPLEFT", 30, headerY - 20)
+        scroll:SetPoint("BOTTOMRIGHT", dkpPanel, "BOTTOMRIGHT", -30, 60)
 
-            local d = EnsurePlayer(player)
-            local old = d.rotated
-            d.rotated = not d.rotated
+        local sb = scroll.ScrollBar
+        if sb then
+            sb:ClearAllPoints()
+            sb:SetPoint("TOPRIGHT", scroll, "TOPRIGHT", -5, -18)
+            sb:SetPoint("BOTTOMRIGHT", scroll, "BOTTOMRIGHT", -20, 16)
+        end
 
-            LogAudit(player, "rotated", tostring(old), tostring(d.rotated))
-            UpdateTable()
-        end)
+        scrollChild = CreateFrame("Frame", nil, scroll)
+        scrollChild:SetSize(1, 1)
+        scroll:SetScrollChild(scrollChild)
 
-    ---------------------------------------------------------
-    -- 3. WHISPER BUTTON
-    ---------------------------------------------------------
-    elseif field == "whisper" then
-        local btn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
-        btn:SetPoint("LEFT", row, "LEFT", colX + 5, 0)
-        btn:SetSize(h.width - 10, 16)
-        btn:SetText("Tell")
-        row.cols[j] = btn
+        local MAX_ROWS = 666
+        local ROW_HEIGHT = 18
 
-    ---------------------------------------------------------
-    -- 4. BALANCE COLUMN (READ‑ONLY)
-    ---------------------------------------------------------
-    elseif field == "balance" then
-        local fs = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        fs:SetPoint("LEFT", row, "LEFT", colX, 0)
-        fs:SetWidth(h.width)
-        fs:SetJustifyH("LEFT")
-        -- NO EnableMouse → cannot click
-        row.cols[j] = fs
+        rows = {}
 
-    ---------------------------------------------------------
-    -- 5. NORMAL EDITABLE NUMERIC COLUMNS
-    ---------------------------------------------------------
-    else
-        local fs = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        fs:SetPoint("LEFT", row, "LEFT", colX, 0)
-        fs:SetWidth(h.width)
-        fs:SetJustifyH("LEFT")
-        fs:EnableMouse(true)
-        row.cols[j] = fs
+        for i = 1, MAX_ROWS do
+            local row = CreateFrame("Frame", nil, scrollChild)
+            row:SetSize(1, ROW_HEIGHT)
+            row:SetPoint("TOPLEFT", 0, -(i - 1) * ROW_HEIGHT)
 
-        fs:SetScript("OnMouseDown", function(self, button)
-            if button ~= "LeftButton" then return end
-            if not IsAuthorized() then return end
+            local bg = row:CreateTexture(nil, "BACKGROUND")
+            bg:SetAllPoints()
+            bg:SetColorTexture(0, 0, 0, 0.15)
+            row.bg = bg
 
-            inlineEdit:Hide()
+            local delBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+            delBtn:SetSize(15, 15)
+            delBtn:SetPoint("LEFT", row, "LEFT", 2, 0)
+            delBtn:SetText("X")
+            row.deleteButton = delBtn
 
-            local rowIndex = row.index
-            local colIndex = j
-            local player   = sortedNames[rowIndex]
-            local field    = fieldMap[colIndex]
-            if not player or not field then return end
-
-            local d = EnsurePlayer(player)
-
-            -- Inline edit setup
-            self:Hide()
-            inlineEdit.currentFS = self
-            inlineEdit.editPlayer = player
-            inlineEdit.editField  = field
-
-            inlineEdit:ClearAllPoints()
-            inlineEdit:SetPoint("LEFT", self, "LEFT", 0, 0)
-            inlineEdit:SetWidth(headers[colIndex].width - 4)
-            inlineEdit:SetText(tostring(d[field] or 0))
-            inlineEdit:HighlightText()
-
-            inlineEdit.saveFunc = function(newValue)
-                local num = tonumber(newValue)
-                if not num then return end
-
-                local old = d[field]
-
-                -- Apply caps
-                if field == "onTime" and num > 10 then
-                    Print("|cffff5555On-Time DKP cannot exceed 10.|r")
-                    UpdateTable()
-                    return
-                end
-                if field == "attendance" and num > 30 then
-                    Print("|cffff5555Attendance DKP cannot exceed 30.|r")
-                    UpdateTable()
-                    return
-                end
-
-                if old == num then
-                    UpdateTable()
-                    return
-                end
-
-                d[field] = num
-                RecalcBalance(d)
-                LogAudit(player, field, old, num)
-                UpdateTable()
+            if not IsEditor(UnitName("player")) then
+                row.deleteButton:Hide()
             end
 
-            inlineEdit:Show()
+            row.cols = {}
+            local colX = 30
+
+            for j, h in ipairs(headers) do
+                local field = fieldMap[j]
+
+                if field == "name" then
+                    local nameFS = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+                    nameFS:SetPoint("LEFT", row, "LEFT", colX, 0)
+                    nameFS:SetWidth(h.width)
+                    nameFS:SetJustifyH("LEFT")
+                    nameFS:EnableMouse(true)
+                    row.cols[j] = nameFS
+
+                elseif field == "rotated" then
+                    local fs = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+                    fs:SetPoint("LEFT", row, "LEFT", colX, 0)
+                    fs:SetWidth(h.width)
+                    fs:SetJustifyH("LEFT")
+                    fs:EnableMouse(true)
+                    row.cols[j] = fs
+
+                elseif field == "whisper" then
+                    local btn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+                    btn:SetPoint("LEFT", row, "LEFT", colX + 5, 0)
+                    btn:SetSize(h.width - 10, 16)
+                    btn:SetText("Tell")
+                    row.cols[j] = btn
+
+                elseif field == "balance" then
+                    local fs = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+                    fs:SetPoint("LEFT", row, "LEFT", colX, 0)
+                    fs:SetWidth(h.width)
+                    fs:SetJustifyH("LEFT")
+                    row.cols[j] = fs
+
+                else
+                    local fs = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+                    fs:SetPoint("LEFT", row, "LEFT", colX, 0)
+                    fs:SetWidth(h.width)
+                    fs:SetJustifyH("LEFT")
+                    fs:EnableMouse(true)
+                    row.cols[j] = fs
+                end
+
+                colX = colX + h.width + 5
+            end
+
+            rows[i] = row
+        end
+
+        ----------------------------------------------------------------
+        -- INLINE EDIT BOX
+        ----------------------------------------------------------------
+        inlineEdit = CreateFrame("EditBox", nil, scrollChild, "InputBoxTemplate")
+        inlineEdit:SetAutoFocus(true)
+        inlineEdit:SetSize(80, 18)
+        inlineEdit:Hide()
+        inlineEdit.cancelled = false
+        inlineEdit:SetFrameStrata("HIGH")
+
+        inlineEdit:SetScript("OnEscapePressed", function(self)
+            self.cancelled = true
+            self:Hide()
         end)
-    end
 
-    colX = colX + h.width + 5
-end
-		rows[i] = row
-	end
+        inlineEdit:SetScript("OnEnterPressed", function(self)
+            self.cancelled = false
+            if self.saveFunc then self.saveFunc(self:GetText()) end
+            self:Hide()
+        end)
 
-    -- Inline edit box for numeric fields
-    inlineEdit = CreateFrame("EditBox", nil, scrollChild, "InputBoxTemplate")
-    inlineEdit:SetAutoFocus(true)
-    inlineEdit:SetSize(80, 18)
-    inlineEdit:Hide()
-    inlineEdit.cancelled = false
-    inlineEdit:SetFrameStrata("HIGH")
+        inlineEdit:SetScript("OnEditFocusLost", function(self)
+            if not self.cancelled and self.saveFunc then
+                self.saveFunc(self:GetText())
+            end
+            self:Hide()
+        end)
 
-    inlineEdit:SetScript("OnEscapePressed", function(self)
-        self.cancelled = true
-        self:Hide()
-    end)
+        inlineEdit:SetScript("OnHide", function(self)
+            if self.currentFS then
+                self.currentFS:Show()
+                self.currentFS = nil
+            end
+        end)
 
-    inlineEdit:SetScript("OnEnterPressed", function(self)
-        self.cancelled = false
-        if self.saveFunc then self.saveFunc(self:GetText()) end
-        self:Hide()
-    end)
-
-    inlineEdit:SetScript("OnEditFocusLost", function(self)
-        if not self.cancelled and self.saveFunc then
-            self.saveFunc(self:GetText())
-        end
-        self:Hide()
-    end)
-
-    inlineEdit:SetScript("OnHide", function(self)
-        if self.currentFS then
-            self.currentFS:Show()
-            self.currentFS = nil
-        end
-    end)
-
-    for _, row in ipairs(rows) do
-    local delBtn = row.deleteButton
-    delBtn:SetScript("OnClick", function()
-        if not IsAuthorized() then
-            Print("Only editors can delete DKP records.")
-            return
-        end
-        local player = sortedNames[row.index]
-        if not player then return end
-        StaticPopup_Show("REDDKP_DELETE_PLAYER", player, nil, player)
-    end)
-
-    for j, col in ipairs(row.cols) do
-        local field = fieldMap[j]
-
-        --------------------------------------------------------------------
-        -- WHISPER BUTTON (last column)
-        --------------------------------------------------------------------
-        if j == #headers then
-            local whisperBtn = col
-            whisperBtn:SetScript("OnClick", function()
-                local index = row.index
-                if not index then return end
-                local player = sortedNames[index]
-                if not player then return end
-                local d = RedDKP_Data[player]
-                if not d then return end
-                local msg = string.format(
-                    "Your DKP: LastWeek=%d, OnTime=%d, Attendance=%d, Bench=%d, Spent=%d, CURRENTBalance=%d",
-                    d.lastWeek or 0,
-                    d.onTime or 0,
-                    d.attendance or 0,
-                    d.bench or 0,
-                    d.spent or 0,
-                    d.balance or 0
-                )
-                SendChatMessage(msg, "WHISPER", nil, player)
-                Print("Whisper sent to " .. player)
-            end)
-
-        --------------------------------------------------------------------
-        -- BALANCE COLUMN (READ‑ONLY)
-        --------------------------------------------------------------------
-        elseif field == "balance" then
-            col:EnableMouse(false)
-            col:SetScript("OnMouseDown", nil)
-
-        --------------------------------------------------------------------
-        -- ROTATED COLUMN (toggle)
-        --------------------------------------------------------------------
-        elseif field == "rotated" then
-            col:EnableMouse(true)
-            col:SetScript("OnMouseDown", function(self, button)
-                if button ~= "LeftButton" then return end
-                if not IsAuthorized() then return end
-
+        ----------------------------------------------------------------
+        -- PER-ROW SCRIPTS: DELETE, WHISPER, EDIT
+        ----------------------------------------------------------------
+        for _, row in ipairs(rows) do
+            local delBtn = row.deleteButton
+            delBtn:SetScript("OnClick", function()
+                if not IsAuthorized() then
+                    Print("Only editors can delete DKP records.")
+                    return
+                end
                 local player = sortedNames[row.index]
                 if not player then return end
-
-                local d = EnsurePlayer(player)
-                local old = d.rotated
-                d.rotated = not d.rotated
-
-                LogAudit(player, "rotated", tostring(old), tostring(d.rotated))
-                UpdateTable()
+                StaticPopup_Show("REDDKP_DELETE_PLAYER", player, nil, player)
             end)
 
-        --------------------------------------------------------------------
-        -- NAME + NUMERIC FIELDS (editable)
-        --------------------------------------------------------------------
-        else
-            col:EnableMouse(true)
-            col:SetScript("OnMouseDown", function(self, button)
-                if button ~= "LeftButton" then return end
-                if not IsAuthorized() then return end
+            for j, col in ipairs(row.cols) do
+                local field = fieldMap[j]
 
-                inlineEdit:Hide()
+                -- Whisper button (last column)
+                if field == "whisper" then
+                    col:SetScript("OnClick", function()
+                        local index = row.index
+                        if not index then return end
+                        local player = sortedNames[index]
+                        if not player then return end
+                        local d = RedDKP_Data[player]
+                        if not d then return end
+                        local msg = string.format(
+                            "Your DKP: LastWeek=%d, OnTime=%d, Attendance=%d, Bench=%d, Spent=%d, CURRENTBalance=%d",
+                            d.lastWeek or 0,
+                            d.onTime or 0,
+                            d.attendance or 0,
+                            d.bench or 0,
+                            d.spent or 0,
+                            d.balance or 0
+                        )
+                        SendChatMessage(msg, "WHISPER", nil, player)
+                        Print("Whisper sent to " .. player)
+                    end)
 
-                local rowIndex = row.index
-                local colIndex = j
-                local player   = sortedNames[rowIndex]
-                local field    = fieldMap[colIndex]
-                if not player or not field then return end
+                elseif field == "balance" then
+                    col:EnableMouse(false)
 
-                local d = EnsurePlayer(player)
+                elseif field == "rotated" then
+                    col:SetScript("OnMouseDown", function(self, button)
+                        if button ~= "LeftButton" then return end
+                        if not IsAuthorized() then return end
 
-                -------------------------------------------------------------
-                -- NAME EDIT
-                -------------------------------------------------------------
-                if field == "name" then
-                    local playerName = sortedNames[row.index]
-                    if not playerName then return end
+                        local player = sortedNames[row.index]
+                        if not player then return end
 
-                    inlineEdit:Hide()
-                    self:Hide()
+                        local d = EnsurePlayer(player)
+                        local old = d.rotated
+                        d.rotated = not d.rotated
 
-                    inlineEdit.currentFS = self
-                    inlineEdit.editPlayer = playerName
-                    inlineEdit.editField  = "name"
+                        LogAudit(player, "rotated", tostring(old), tostring(d.rotated))
+                        UpdateTable()
+                    end)
 
-                    inlineEdit:ClearAllPoints()
-                    inlineEdit:SetPoint("LEFT", self, "LEFT", 0, 0)
-                    inlineEdit:SetWidth(headers[colIndex].width - 4)
-                    inlineEdit:SetText(playerName)
-                    inlineEdit:HighlightText()
+                else
+                    col:SetScript("OnMouseDown", function(self, button)
+                        if button ~= "LeftButton" then return end
+                        if not IsAuthorized() then return end
 
-                    inlineEdit.saveFunc = function(newName)
-                        newName = newName:gsub("^%s*(.-)%s*$", "%1")
-                        if newName == "" or newName == playerName then return end
+                        inlineEdit:Hide()
 
-                        if RedDKP_Data[newName] then
-                            Print("|cffff5555A player with that name already exists.|r")
+                        local rowIndex = row.index
+                        local colIndex = j
+                        local player   = sortedNames[rowIndex]
+                        local field    = fieldMap[colIndex]
+                        if not player or not field then return end
+
+                        local d = EnsurePlayer(player)
+
+                        -- NAME EDIT
+                        if field == "name" then
+                            local playerName = sortedNames[row.index]
+                            if not playerName then return end
+
+                            inlineEdit:Hide()
+                            self:Hide()
+
+                            inlineEdit.currentFS = self
+                            inlineEdit.editPlayer = playerName
+                            inlineEdit.editField  = "name"
+
+                            inlineEdit:ClearAllPoints()
+                            inlineEdit:SetPoint("LEFT", self, "LEFT", 0, 0)
+                            inlineEdit:SetWidth(headers[colIndex].width - 4)
+                            inlineEdit:SetText(playerName)
+                            inlineEdit:HighlightText()
+
+                            inlineEdit.saveFunc = function(newName)
+                                newName = newName:gsub("^%s*(.-)%s*$", "%1")
+                                if newName == "" or newName == playerName then return end
+
+                                if RedDKP_Data[newName] then
+                                    Print("|cffff5555A player with that name already exists.|r")
+                                    return
+                                end
+
+                                RedDKP_Data[newName] = RedDKP_Data[playerName]
+                                RedDKP_Data[playerName] = nil
+
+                                local _, class = UnitClass(newName)
+                                if class then
+                                    RedDKP_Data[newName].class = class
+                                elseif IsInGuild() then
+                                    for i = 1, GetNumGuildMembers() do
+                                        local gName, _, _, _, _, _, _, _, _, _, gClass = GetGuildRosterInfo(i)
+                                        if gName and Ambiguate(gName, "short") == newName then
+                                            RedDKP_Data[newName].class = gClass
+                                            break
+                                        end
+                                    end
+                                end
+
+                                local editor = UnitName("player")
+                                LogAudit(newName, "RENAME_PLAYER", "changed",
+                                    string.format("Renamed by %s | %s → %s", editor, playerName, newName)
+                                )
+
+                                UpdateTable()
+                            end
+
+                            inlineEdit:Show()
                             return
                         end
 
-                        RedDKP_Data[newName] = RedDKP_Data[playerName]
-                        RedDKP_Data[playerName] = nil
+                        -- NUMERIC FIELD EDIT
+                        self:Hide()
+                        inlineEdit.currentFS = self
 
-                        local _, class = UnitClass(newName)
-                        if class then
-                            RedDKP_Data[newName].class = class
-                        elseif IsInGuild() then
-                            for i = 1, GetNumGuildMembers() do
-                                local gName, _, _, _, _, _, _, _, _, _, gClass = GetGuildRosterInfo(i)
-                                if gName and Ambiguate(gName, "short") == newName then
-                                    RedDKP_Data[newName].class = gClass
-                                    break
-                                end
+                        inlineEdit.editPlayer = player
+                        inlineEdit.editField  = field
+
+                        inlineEdit:ClearAllPoints()
+                        inlineEdit:SetPoint("LEFT", self, "LEFT", 0, 0)
+                        inlineEdit:SetWidth(headers[colIndex].width - 4)
+                        inlineEdit:SetText(tostring(d[field] or 0))
+                        inlineEdit:HighlightText()
+
+                        inlineEdit.saveFunc = function(newValue)
+                            local num = tonumber(newValue)
+                            if not num then return end
+
+                            local playerName = inlineEdit.editPlayer
+                            local fieldName  = inlineEdit.editField
+                            local dkp = RedDKP_Data[playerName]
+                            if not dkp then return end
+
+                            local old = dkp[fieldName]
+
+                            if fieldName == "onTime" and num > 10 then
+                                Print("|cffff5555On-Time DKP cannot exceed 10.|r")
+                                UpdateTable()
+                                return
                             end
+
+                            if fieldName == "attendance" and num > 30 then
+                                Print("|cffff5555Attendance DKP cannot exceed 30.|r")
+                                UpdateTable()
+                                return
+                            end
+
+                            if old == num then
+                                UpdateTable()
+                                return
+                            end
+
+                            dkp[fieldName] = num
+                            RecalcBalance(dkp)
+
+                            if num == 69 then
+                                print("|cff00ff00Nice!|r")
+                            end
+
+                            LogAudit(playerName, fieldName, old, num)
+                            UpdateTable()
                         end
 
-                        local editor = UnitName("player")
-                        LogAudit(newName, "RENAME_PLAYER", "changed",
-                            string.format("Renamed by %s | %s → %s", editor, playerName, newName)
-                        )
-
-                        UpdateTable()
-                    end
-
-                    inlineEdit:Show()
-                    return
+                        inlineEdit:Show()
+                    end)
                 end
+            end
+        end
+    end
 
-                -------------------------------------------------------------
-                -- NUMERIC FIELD EDIT
-                -------------------------------------------------------------
-                self:Hide()
-                inlineEdit.currentFS = self
+    --------------------------------------------------------------------
+    -- ADD PLAYER INPUT
+    --------------------------------------------------------------------
+    do
+        local addInput = CreateFrame("EditBox", nil, dkpPanel, "InputBoxTemplate")
+        addInput:SetSize(140, 20)
+        addInput:SetPoint("BOTTOMLEFT", dkpPanel, "BOTTOMLEFT", 20, 10)
+        addInput:SetAutoFocus(false)
 
-                inlineEdit.editPlayer = player
-                inlineEdit.editField  = field
+        if not IsEditor(UnitName("player")) then
+            addInput:Hide()
+        end
 
-                inlineEdit:ClearAllPoints()
-                inlineEdit:SetPoint("LEFT", self, "LEFT", 0, 0)
-                inlineEdit:SetWidth(headers[colIndex].width - 4)
-                inlineEdit:SetText(tostring(d[field] or 0))
-                inlineEdit:HighlightText()
+        addInput:HookScript("OnEditFocusGained", function(self)
+            if self._clickCatcher then return end
 
-                inlineEdit.saveFunc = function(newValue)
-                    local num = tonumber(newValue)
-                    if not num then return end
+            local catcher = CreateFrame("Frame", nil, UIParent)
+            catcher:SetAllPoints(UIParent)
+            catcher:EnableMouse(true)
+            catcher:SetFrameStrata("TOOLTIP")
 
-                    local playerName = inlineEdit.editPlayer
-                    local fieldName  = inlineEdit.editField
-                    local dkp = RedDKP_Data[playerName]
-                    if not dkp then return end
-
-                    local old = dkp[fieldName]
-
-                    -- VALUE CAPS
-                    if fieldName == "onTime" and num > 10 then
-                        Print("|cffff5555On-Time DKP cannot exceed 10 within a single DKP week.|r")
-                        UpdateTable()
-                        return
-                    end
-
-                    if fieldName == "attendance" and num > 30 then
-                        Print("|cffff5555Attendance DKP cannot exceed 30 within a single DKP week.|r")
-                        UpdateTable()
-                        return
-                    end
-
-                    if old == num then
-                        UpdateTable()
-                        return
-                    end
-
-                    dkp[fieldName] = num
-                    RecalcBalance(dkp)
-
-                    if num == 69 then
-                        print("|cff00ff00Nice!|r")
-                    end
-
-                    LogAudit(playerName, fieldName, old, num)
-                    UpdateTable()
-                end
-
-                inlineEdit:Show()
+            catcher:SetScript("OnMouseDown", function()
+                self:ClearFocus()
+                catcher:Hide()
             end)
-        end
-    end
-end
 
-    local addInput = CreateFrame("EditBox", nil, dkpPanel, "InputBoxTemplate")
-    addInput:SetSize(140, 20)
-    addInput:SetPoint("BOTTOMLEFT", dkpPanel, "BOTTOMLEFT", 20, 10)
-    addInput:SetAutoFocus(false)
+            catcher:SetScript("OnHide", function()
+                catcher:SetParent(nil)
+                self._clickCatcher = nil
+            end)
 
-    if not IsEditor(UnitName("player")) then
-        addInput:Hide()
-    end
-
-    addInput:HookScript("OnEditFocusGained", function(self)
-        if self._clickCatcher then return end
-
-        local catcher = CreateFrame("Frame", nil, UIParent)
-        catcher:SetAllPoints(UIParent)
-        catcher:EnableMouse(true)
-        catcher:SetFrameStrata("TOOLTIP")
-
-        catcher:SetScript("OnMouseDown", function()
-            self:ClearFocus()
-            catcher:Hide()
+            self._clickCatcher = catcher
         end)
 
-        catcher:SetScript("OnHide", function()
-            catcher:SetParent(nil)
-            self._clickCatcher = nil
-        end)
-        self._clickCatcher = catcher
-    end)
+        addInput:SetScript("OnEscapePressed", addInput.ClearFocus)
+        addInput:SetScript("OnEnterPressed", addInput.ClearFocus)
 
-    addInput:SetScript("OnEscapePressed", addInput.ClearFocus)
-    addInput:SetScript("OnEnterPressed", addInput.ClearFocus)
+        local addButton = CreateFrame("Button", nil, dkpPanel, "UIPanelButtonTemplate")
+        addButton:SetSize(100, 22)
+        addButton:SetPoint("LEFT", addInput, "RIGHT", 10, 0)
+        addButton:SetText("Add")
 
-    local addButton = CreateFrame("Button", nil, dkpPanel, "UIPanelButtonTemplate")
-    addButton:SetSize(100, 22)
-    addButton:SetPoint("LEFT", addInput, "RIGHT", 10, 0)
-    addButton:SetText("Add")
-    if not IsEditor(UnitName("player")) then
-        addButton:Hide()
-    end
-    addButton:SetScript("OnClick", function()
-        if not IsAuthorized() then
-            Print("Only editors can add DKP records.")
-            return
+        if not IsEditor(UnitName("player")) then
+            addButton:Hide()
         end
 
-        local name = addInput:GetText():gsub("%s+", "")
-        if name == "" then
-            return
-        end
-
-        local upper = string.upper(name)
-        for existingName in pairs(RedDKP_Data) do
-            if string.upper(existingName) == upper then
-                Print("|cffff0000A DKP record already exists for:|r " .. existingName)
+        addButton:SetScript("OnClick", function()
+            if not IsAuthorized() then
+                Print("Only editors can add DKP records.")
                 return
             end
-        end
 
-        local d = EnsurePlayer(name)
+            local name = addInput:GetText():gsub("%s+", "")
+            if name == "" then return end
 
-        local _, class = UnitClass(name)
-        if class then
-            d.class = class
-        elseif IsInGuild() then
-            for i = 1, GetNumGuildMembers() do
-                local gName, _, _, _, _, _, _, _, _, _, gClass = GetGuildRosterInfo(i)
-                if gName and Ambiguate(gName, "short") == name then
-                    d.class = gClass
-                    break
+            local upper = string.upper(name)
+            for existingName in pairs(RedDKP_Data) do
+                if string.upper(existingName) == upper then
+                    Print("|cffff0000A DKP record already exists for:|r " .. existingName)
+                    return
                 end
             end
+
+            local d = EnsurePlayer(name)
+
+            local _, class = UnitClass(name)
+            if class then
+                d.class = class
+            elseif IsInGuild() then
+                for i = 1, GetNumGuildMembers() do
+                    local gName, _, _, _, _, _, _, _, _, _, gClass = GetGuildRosterInfo(i)
+                    if gName and Ambiguate(gName, "short") == name then
+                        d.class = gClass
+                        break
+                    end
+                end
+            end
+
+            addInput:SetText("")
+            UpdateTable()
+            Print("Added DKP record for " .. name)
+        end)
+    end
+
+    --------------------------------------------------------------------
+    -- SYNC BUTTONS
+    --------------------------------------------------------------------
+    do
+        local requestBtn = CreateFrame("Button", nil, dkpPanel, "UIPanelButtonTemplate")
+        requestBtn:SetSize(120, 24)
+        requestBtn:SetText("Request SYNC")
+        requestBtn:SetPoint("BOTTOMRIGHT", dkpPanel, "BOTTOMRIGHT", -10, 10)
+        requestBtn:SetScript("OnClick", function()
+            StaticPopup_Show("REDDKP_REQUEST_SYNC_CONFIRM")
+        end)
+
+        local forceBtn = CreateFrame("Button", nil, dkpPanel, "UIPanelButtonTemplate")
+        forceBtn:SetSize(120, 24)
+        forceBtn:SetText("FORCE Sync")
+        forceBtn:SetPoint("RIGHT", requestBtn, "LEFT", -10, 0)
+
+        if not IsEditor(UnitName("player")) then
+            forceBtn:Hide()
         end
 
-        addInput:SetText("")
-        UpdateTable()
-        Print("Added DKP record for " .. name)
-    end)
-
-    local requestBtn = CreateFrame("Button", nil, dkpPanel, "UIPanelButtonTemplate")
-    requestBtn:SetSize(120, 24)
-    requestBtn:SetText("Request SYNC")
-    requestBtn:SetPoint("BOTTOMRIGHT", dkpPanel, "BOTTOMRIGHT", -10, 10)
-    requestBtn:SetScript("OnClick", function()
-        StaticPopup_Show("REDDKP_REQUEST_SYNC_CONFIRM")
-    end)
-
-    local forceBtn = CreateFrame("Button", nil, dkpPanel, "UIPanelButtonTemplate")
-    forceBtn:SetSize(120, 24)
-    forceBtn:SetText("FORCE Sync")
-    forceBtn:SetPoint("RIGHT", requestBtn, "LEFT", -10, 0)
-    if not IsEditor(UnitName("player")) then
-        forceBtn:Hide()
+        forceBtn:SetScript("OnClick", function()
+            if not IsAuthorized() then return end
+            StaticPopup_Show("REDDKP_FORCE_SYNC_CONFIRM")
+        end)
     end
-    forceBtn:SetScript("OnClick", function()
-        if not IsAuthorized() then return end
-        StaticPopup_Show("REDDKP_FORCE_SYNC_CONFIRM")
-    end)
 
+    --------------------------------------------------------------------
+    -- FINALIZE
+    --------------------------------------------------------------------
     RecalculateAllBalances()
     UpdateTable()
     ShowTab(TAB_DKP)
