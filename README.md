@@ -22,6 +22,7 @@ Missing functionality I want to add ASAP:
 9. A warning to the RL/ML that they have to allocate Attendance DKP before people leave the group
 10. (Done) Restore the chat window slash commmands
 11. (Done) Balance field shouldn't be able to be edited
+12. Clicking away from edit value on DKP table doesnt deslect value (like pressing enter would)
 
 
 Known Bugs:
