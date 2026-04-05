@@ -16,11 +16,14 @@ local addonName      = ...
 local REDDKP_VERSION = "1.0.0"
 local VERSION_PREFIX = "REDDKP_VER"
 local SYNC_PREFIX    = "REDDKP_SYNC"
+EDITOR_SYNC_PREFIX 	 = "REDDKP_EDITOR_SYNC"
 
 RedDKP_Config.smartSync      = (RedDKP_Config.smartSync ~= false)
 RedDKP_Config.addonUsers     = RedDKP_Config.addonUsers     or {}
 RedDKP_Config.onlineEditors  = RedDKP_Config.onlineEditors  or {}
 RedDKP_Config.authorizedEditors = RedDKP_Config.authorizedEditors or {}
+
+RedDKP_Usage = RedDKP_Usage or {}
 
 local mainFrame
 local dkpPanel, raidPanel, editorsPanel, auditPanel
@@ -91,6 +94,8 @@ local function IsGuildOfficer()
     local _, _, rankIndex = GetGuildInfo("player")
     return rankIndex == 0 or rankIndex == 1
 end
+
+
 
 local function RecalcBalance(d)
     d.balance = (d.lastWeek or 0)
@@ -182,6 +187,19 @@ local function GetGuildLeader()
     return nil
 end
 
+local function IsNameInGuild(name)
+    if not IsInGuild() then return false end
+
+    for i = 1, GetNumGuildMembers() do
+        local gName = GetGuildRosterInfo(i)
+        if gName and Ambiguate(gName, "short") == name then
+            return true
+        end
+    end
+
+    return false
+end
+
 local function GetProtectedEditor()
     local guildLeader = GetGuildLeader()
     if guildLeader then
@@ -210,7 +228,53 @@ local function IsRaidLeaderOrMasterLooter()
     return false
 end
 
-RedDKP_Usage = RedDKP_Usage or {}
+local function NameExists(newName, oldName)
+    -- Trim whitespace
+    newName = strtrim(newName)
+
+    -- If the new name is empty, treat it as non-existent
+    if newName == "" then
+        return false
+    end
+
+    -- Normalize for comparison
+    local newLower = strlower(newName)
+
+    for name, d in pairs(RedDKP_Data) do
+
+        --------------------------------------------------------
+        -- SKIP INVALID OR CORRUPTED DKP KEYS
+        --------------------------------------------------------
+        if type(name) == "string" then
+            local trimmed = strtrim(name)
+
+            -- Skip empty or whitespace-only keys
+            if trimmed ~= "" then
+
+                ------------------------------------------------
+                -- SKIP THE ENTRY BEING EDITED
+                ------------------------------------------------
+                if trimmed ~= oldName then
+
+                    ------------------------------------------------
+                    -- SKIP INVALID DKP ENTRIES
+                    ------------------------------------------------
+                    if not d.invalid then
+
+                        ------------------------------------------------
+                        -- CASE-INSENSITIVE COMPARE
+                        ------------------------------------------------
+                        if strlower(trimmed) == newLower then
+                            return true
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    return false
+end
 
 local function UsedToday(key)
     local player = UnitName("player")
@@ -410,94 +474,190 @@ local scroll
 local scrollChild
 
 function UpdateTable()
+
+print("=== DKP TABLE SCAN START ===")
+for k, v in pairs(RedDKP_Data) do
+    if k == nil then
+        print("BAD KEY: nil")
+    elseif type(k) ~= "string" then
+        print("BAD KEY TYPE:", type(k))
+    else
+        local trimmed = strtrim(k)
+        if trimmed ~= k then
+            print("BAD KEY (needs trim):", "["..k.."]")
+        end
+        if trimmed == "" then
+            print("BAD KEY: empty string")
+        end
+    end
+end
+print("=== DKP TABLE SCAN END ===")
+
     sortedNames = {}
 
-    for name in pairs(RedDKP_Data) do
-        table.insert(sortedNames, name)
-    end
-
-    table.sort(sortedNames, function(a, b)
-		local da = RedDKP_Data[a]
-		local db = RedDKP_Data[b]
-
-		if not da or not db then return a < b end
-
-		-- Sort by name
-		if currentSortField == "name" then
-			if currentSortAscending then
-				return a < b
-			else
-				return a > b
-			end
-		end
-
-		-- Sort by rotated (boolean)
-		if currentSortField == "rotated" then
-			local va = da.rotated and 1 or 0
-			local vb = db.rotated and 1 or 0
-
-			if currentSortAscending then
-				return va < vb
-			else
-				return va > vb
-			end
-		end
-
-		-- Normal numeric sorting
-		local fa = tonumber(da[currentSortField]) or 0
-		local fb = tonumber(db[currentSortField]) or 0
-
-		if currentSortAscending then
-			return fa < fb
-		else
-			return fa > fb
-		end
-    end)
-
-    for i, row in ipairs(rows) do
-		local name = sortedNames[i]
-		if not name then
-			row:Hide()
-		else
-			local d = RedDKP_Data[name]
-			row.index = i
-
-			RecalcBalance(d)
-
-			local classColor = "|cffffffff"
-			if d.class then
-				local c = RAID_CLASS_COLORS[d.class]
-				if c then
-					classColor = string.format("|cff%02x%02x%02x", c.r * 255, c.g * 255, c.b * 255)
-				end
-			end
-
-			-- NAME
-			row.cols[1]:SetText(classColor .. name .. "|r")
-
-			-- NUMERIC FIELDS
-			row.cols[2]:SetText(d.lastWeek or 0)
-			row.cols[3]:SetText(d.onTime or 0)
-			row.cols[4]:SetText(d.attendance or 0)
-			row.cols[5]:SetText(d.bench or 0)
-			row.cols[6]:SetText(d.spent or 0)
-
-			-- BALANCE
-			row.cols[7]:SetText(ColorizeBalance(d.balance))
-
-			-- ROTATED
-			row.cols[8]:SetText(
-				d.rotated
-					and "|cff00ff00Yes|r"
-					or  "No"
-			)
-
-			-- WHISPER BUTTON stays untouched (col 9)
-
-			row:Show()
-		end
+	-- Reset all row indexes to avoid stale references
+	for i = 1, #rows do
+		rows[i].index = nil
 	end
 
+    ----------------------------------------------------------------
+    -- GUILD VALIDATION HELPER
+    ----------------------------------------------------------------
+    local function IsNameInGuild(name)
+        if not IsInGuild() then return false end
+        for i = 1, GetNumGuildMembers() do
+            local gName = GetGuildRosterInfo(i)
+            if gName and Ambiguate(gName, "short") == name then
+                return true
+            end
+        end
+        return false
+    end
+
+    ----------------------------------------------------------------
+    -- BUILD SORT LIST + VALIDATE DKP ENTRIES
+    ----------------------------------------------------------------
+    for name, d in pairs(RedDKP_Data) do
+
+        ------------------------------------------------------------
+        -- VALIDATE GUILD MEMBERSHIP
+        ------------------------------------------------------------
+        if not IsNameInGuild(name) then
+            d.note = "(check name)"
+            d.invalid = true
+        else
+            d.invalid = false
+        end
+
+        ------------------------------------------------------------
+        -- FILTER OUT INVALID OR CORRUPTED KEYS
+        ------------------------------------------------------------
+        if not d.invalid and type(name) == "string" then
+            local trimmed = strtrim(name)
+            if trimmed ~= "" then
+                table.insert(sortedNames, trimmed)
+            end
+        end
+    end
+	
+	----------------------------------------------------------------
+    -- CLEAN SORTED NAMES (remove any nil / non-string / empty)
+    ----------------------------------------------------------------
+    do
+        local cleaned = {}
+        for _, name in ipairs(sortedNames) do
+            if type(name) == "string" then
+                local trimmed = strtrim(name)
+                if trimmed ~= "" then
+                    table.insert(cleaned, trimmed)
+                end
+            end
+        end
+        sortedNames = cleaned
+    end
+	
+    ----------------------------------------------------------------
+    -- SORTING (NIL-SAFE)
+    ----------------------------------------------------------------
+	
+if currentSortField == "name" then
+    -- Simple, safe alphabetical sort
+    if currentSortAscending then
+        table.sort(sortedNames, function(a, b)
+            return a < b
+        end)
+    else
+        table.sort(sortedNames, function(a, b)
+            return a > b
+        end)
+    end
+else
+    -- Strict, total order for numeric/rotated fields
+    table.sort(sortedNames, function(a, b)
+        if a == nil and b == nil then return false end
+        if a == nil then return false end
+        if b == nil then return true end
+
+        a = tostring(a)
+        b = tostring(b)
+
+        local da = RedDKP_Data[a] or {}
+        local db = RedDKP_Data[b] or {}
+
+        local va, vb
+
+        if currentSortField == "rotated" then
+            va = da.rotated and 1 or 0
+            vb = db.rotated and 1 or 0
+        else
+            va = tonumber(da[currentSortField]) or 0
+            vb = tonumber(db[currentSortField]) or 0
+        end
+
+        -- Primary: field value
+        if va ~= vb then
+            if currentSortAscending then
+                return va < vb
+            else
+                return va > vb
+            end
+        end
+
+        -- Tie-breaker: name (always ascending for stability)
+        return a < b
+    end)
+end
+
+    ----------------------------------------------------------------
+    -- RENDER ROWS
+    ----------------------------------------------------------------
+    for i = 1, #rows do
+        local row = rows[i]
+        local name = sortedNames[i]
+
+        if not name then
+            row:Hide()
+        else
+            local d = RedDKP_Data[name]
+            row.index = i
+
+            RecalcBalance(d)
+
+            local classColor = "|cffffffff"
+            if d.class then
+                local c = RAID_CLASS_COLORS[d.class]
+                if c then
+                    classColor = string.format("|cff%02x%02x%02x",
+                        c.r * 255, c.g * 255, c.b * 255)
+                end
+            end
+
+            local displayName = name
+            if d.invalid then
+                displayName = displayName .. " |cffff0000(check name)|r"
+            end
+
+            row.cols[1]:SetText(classColor .. displayName .. "|r")
+
+            row.cols[2]:SetText(d.lastWeek or 0)
+            row.cols[3]:SetText(d.onTime or 0)
+            row.cols[4]:SetText(d.attendance or 0)
+            row.cols[5]:SetText(d.bench or 0)
+            row.cols[6]:SetText(d.spent or 0)
+
+            row.cols[7]:SetText(ColorizeBalance(d.balance))
+
+            row.cols[8]:SetText(
+                d.rotated and "|cff00ff00Yes|r" or "No"
+            )
+
+            row:Show()
+        end
+    end
+
+    ----------------------------------------------------------------
+    -- SCROLL HEIGHT
+    ----------------------------------------------------------------
     local visibleRows = #sortedNames
     local rowHeight = 18
 
@@ -508,12 +668,7 @@ function UpdateTable()
             if scroll.ScrollBar then
                 local sb = scroll.ScrollBar
                 local maxScroll = scroll:GetVerticalScrollRange()
-
-                if maxScroll > 0 then
-                    sb:Show()
-                else
-                    sb:Hide()
-                end
+                if maxScroll > 0 then sb:Show() else sb:Hide() end
             end
         end)
     end
@@ -569,19 +724,35 @@ local function BroadcastEditorList()
     C_ChatInfo.SendAddonMessage(EDITOR_PREFIX, message, "GUILD")
 end
 
-local function ApplyEditorList(payload)
+local function ApplyEditorList(payload, sender)
     EnsureConfig()
 
-    local incomingVersion = payload.version or 0
+    -- payload is a string like: "version|name1,name2,name3"
+    local versionStr, editorStr = payload:match("^(%d+)%|(.*)$")
+    if not versionStr then return end
+
+    local incomingVersion = tonumber(versionStr) or 0
     local currentVersion  = RedDKP_Config.editorListVersion or 0
 
+    -- Ignore older or equal versions
     if incomingVersion <= currentVersion then
         return
     end
 
-    RedDKP_Config.authorizedEditors = payload.editors or {}
+    -- Parse editor list
+    local newEditors = {}
+    for name in string.gmatch(editorStr, "([^,]+)") do
+        newEditors[name] = true
+    end
+
+    -- Apply
+    RedDKP_Config.authorizedEditors = newEditors
     RedDKP_Config.editorListVersion = incomingVersion
 
+    -- Optional: track who updated it
+    RedDKP_Config.lastEditorSyncFrom = sender
+
+    -- Refresh UI if open
     if RefreshEditorList then
         RefreshEditorList()
     end
@@ -717,14 +888,19 @@ local function CreateUI()
 --------------------------------------------------------------------
 -- GROUP BUILDER PANEL
 --------------------------------------------------------------------
+    selectedState = selectedState or {}
 do
     local title = groupPanel:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
-    title:SetPoint("TOPLEFT", 10, -10)
+    title:SetPoint("TOPLEFT", 30, -30)
     title:SetText("")
 
+    ------------------------------------------------------------
+    -- LEFT SIDE: SCROLL LIST (HALF WIDTH)
+    ------------------------------------------------------------
     local scroll = CreateFrame("ScrollFrame", nil, groupPanel, "UIPanelScrollFrameTemplate")
-    scroll:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 50, -20)
-    scroll:SetPoint("BOTTOMRIGHT", groupPanel, "BOTTOMRIGHT", -50, 50)
+    scroll:SetPoint("TOPLEFT", title, "BOTTOMLEFT", -20, -20)
+    scroll:SetPoint("BOTTOMLEFT", groupPanel, "BOTTOMLEFT", -20, 50)
+    scroll:SetWidth(groupPanel:GetWidth() * 0.45)
 
     local content = CreateFrame("Frame", nil, scroll)
     content:SetSize(1, 1)
@@ -733,19 +909,92 @@ do
     local ROW_HEIGHT = 20
     groupRows = {}
 
-    ----------------------------------------------------------------
+
+    ------------------------------------------------------------
+    -- RIGHT SIDE: INFO BOX
+    ------------------------------------------------------------
+    local infoBox = CreateFrame("Frame", nil, groupPanel, "BackdropTemplate")
+    infoBox:SetPoint("TOPLEFT", scroll, "TOPRIGHT", 20, 0)
+    infoBox:SetPoint("BOTTOMRIGHT", groupPanel, "BOTTOMRIGHT", -10, 50)
+
+    infoBox:SetBackdrop({
+        bgFile = "Interface/Tooltips/UI-Tooltip-Background",
+        edgeFile = "Interface/Tooltips/UI-Tooltip-Border",
+        tile = true, tileSize = 16, edgeSize = 12,
+        insets = { left = 3, right = 3, top = 3, bottom = 3 }
+    })
+    infoBox:SetBackdropColor(0, 0, 0, 0.6)
+
+    local infoText = infoBox:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    infoText:SetPoint("TOPLEFT", 10, -10)
+    infoText:SetJustifyH("LEFT")
+    infoText:SetWidth(infoBox:GetWidth() - 20)
+    infoText:SetText("No players selected.")
+
+    ------------------------------------------------------------
     -- CLASS COLOUR LOOKUP
-    ----------------------------------------------------------------
+    ------------------------------------------------------------
     local CLASS_COLORS = {}
     for class, c in pairs(RAID_CLASS_COLORS) do
         CLASS_COLORS[class] = string.format("|cff%02x%02x%02x", c.r * 255, c.g * 255, c.b * 255)
     end
 
-    ----------------------------------------------------------------
-    -- ONLINE CHECK (returns true/false)
-    ----------------------------------------------------------------
+    ------------------------------------------------------------
+    -- INFO BOX UPDATE FUNCTION
+    ------------------------------------------------------------
+    local function UpdateGroupBuilderInfo()
+        local selected = {}
+        local classCounts = {}
+        local roleCounts = {
+            tank = 0,
+            melee = 0,
+            caster = 0,
+            healer = 0,
+        }
+
+        for _, row in ipairs(groupRows) do
+            if row:IsShown() and row.checkbox:GetChecked() then
+                table.insert(selected, row.name)
+
+                local class = RedDKP_Data[row.name].class
+                classCounts[class] = (classCounts[class] or 0) + 1
+
+                -- Placeholder for future role data:
+                -- local role = RedDKP_Data[row.name].role
+                -- if role then roleCounts[role] = roleCounts[role] + 1 end
+            end
+        end
+
+        local lines = {}
+
+        table.insert(lines, string.format("Selected: |cffffff00%d|r", #selected))
+
+        table.insert(lines, "")
+        table.insert(lines, "Classes:")
+        for class, count in pairs(classCounts) do
+            local c = RAID_CLASS_COLORS[class]
+            if c then
+                local hex = string.format("|cff%02x%02x%02x", c.r*255, c.g*255, c.b*255)
+                table.insert(lines, string.format("  %s%s|r: %d", hex, class, count))
+            else
+                table.insert(lines, string.format("  %s: %d", class, count))
+            end
+        end
+
+        table.insert(lines, "")
+        table.insert(lines, "Roles:")
+        table.insert(lines, string.format("  Tanks: %d", roleCounts.tank))
+        table.insert(lines, string.format("  Melee DPS: %d", roleCounts.melee))
+        table.insert(lines, string.format("  Caster DPS: %d", roleCounts.caster))
+        table.insert(lines, string.format("  Healers: %d", roleCounts.healer))
+
+        infoText:SetText(table.concat(lines, "\n"))
+    end
+
+    ------------------------------------------------------------
+    -- ONLINE CHECK
+    ------------------------------------------------------------
     local function IsPlayerOnline(name)
-        -- Check raid first
         for i = 1, GetNumGroupMembers() do
             local unit = "raid"..i
             if UnitExists(unit) and UnitName(unit) == name then
@@ -753,7 +1002,6 @@ do
             end
         end
 
-        -- Check party
         for i = 1, GetNumSubgroupMembers() do
             local unit = "party"..i
             if UnitExists(unit) and UnitName(unit) == name then
@@ -761,12 +1009,10 @@ do
             end
         end
 
-        -- Check self
         if UnitName("player") == name then
             return UnitIsConnected("player")
         end
 
-        -- Check guild roster
         if IsInGuild() then
             for i = 1, GetNumGuildMembers() do
                 local gName, _, _, _, _, _, _, _, online = GetGuildRosterInfo(i)
@@ -779,23 +1025,29 @@ do
         return false
     end
 
-    ----------------------------------------------------------------
-    -- REFRESH LIST
-    ----------------------------------------------------------------
-    local function RefreshGroupBuilder()
-        for _, row in ipairs(groupRows) do
-            row:Hide()
-        end
-        wipe(groupRows)
+------------------------------------------------------------
+-- REFRESH LIST 
+------------------------------------------------------------
+local function RefreshGroupBuilder()
+    for _, row in ipairs(groupRows) do
+        row:Hide()
+    end
+    wipe(groupRows)
 
-        local names = {}
-        for name in pairs(RedDKP_Data) do
-            table.insert(names, name)
-        end
-        table.sort(names)
+    local names = {}
+    for name in pairs(RedDKP_Data) do
+        table.insert(names, name)
+    end
+    table.sort(names)
 
-        local i = 0
-        for _, name in ipairs(names) do
+    local i = 0
+    for _, name in ipairs(names) do
+
+        --------------------------------------------------------
+        -- SKIP INVALID DKP ENTRIES
+        --------------------------------------------------------
+        if not RedDKP_Data[name].invalid then
+
             i = i + 1
             local row = groupRows[i]
 
@@ -812,38 +1064,47 @@ do
                 fs:SetPoint("LEFT", cb, "RIGHT", 5, 0)
                 row.nameFS = fs
 
+                cb:SetScript("OnClick", function(self)
+                    if row.name then
+                        selectedState[row.name] = self:GetChecked() or false
+                    end
+                    UpdateGroupBuilderInfo()
+                end)
+
                 groupRows[i] = row
             end
 
             row:SetPoint("TOPLEFT", 10, -(i - 1) * ROW_HEIGHT)
             row.name = name
 
-            -- class colour
             local class = RedDKP_Data[name].class
             local colour = CLASS_COLORS[class] or "|cffffffff"
 
-            -- online check
             local online = IsPlayerOnline(name)
             local offlineText = online and "" or " |cffaaaaaa(offline)|r"
 
             row.nameFS:SetText(colour .. name .. "|r" .. offlineText)
-            row.checkbox:SetChecked(false)
+
+            -- Restore previous selection state (default false)
+            row.checkbox:SetChecked(selectedState[name] or false)
+
             row:Show()
         end
-
-        content:SetHeight(i * ROW_HEIGHT)
     end
 
-    ----------------------------------------------------------------
-    -- 10-SECOND ONLINE SCAN WHILE TAB IS OPEN
-    ----------------------------------------------------------------
+    content:SetHeight(i * ROW_HEIGHT)
+    UpdateGroupBuilderInfo()
+end
+
+    ------------------------------------------------------------
+    -- 10-SECOND ONLINE SCAN
+    ------------------------------------------------------------
     local scanTicker = nil
-
     local function StartOnlineScan()
-        if scanTicker then return end
-        scanTicker = C_Timer.NewTicker(10, RefreshGroupBuilder)
+        if not scanTicker then
+            scanTicker = C_Timer.NewTicker(10, RefreshGroupBuilder)
+        end
     end
-
     local function StopOnlineScan()
         if scanTicker then
             scanTicker:Cancel()
@@ -851,53 +1112,73 @@ do
         end
     end
 
-    ----------------------------------------------------------------
-    -- INVITE BUTTON
-    ----------------------------------------------------------------
+    ------------------------------------------------------------
+    -- INVITE BUTTON (NO AUTO-UNTICK)
+    ------------------------------------------------------------
     local inviteBtn = CreateFrame("Button", nil, groupPanel, "UIPanelButtonTemplate")
     inviteBtn:SetSize(140, 24)
     inviteBtn:SetText("Invite to Group")
     inviteBtn:SetPoint("BOTTOMRIGHT", groupPanel, "BOTTOMRIGHT", -10, 10)
 
     inviteBtn:SetScript("OnClick", function()
-        local selected = {}
+        local pending = {}
+        local playerName = Ambiguate(UnitName("player"), "short")
 
         for _, row in ipairs(groupRows) do
             if row:IsShown() and row.checkbox:GetChecked() then
-                table.insert(selected, row.name)
+                local name = row.name
+                if name ~= playerName and not UnitInParty(name) and not UnitInRaid(name) then
+                    table.insert(pending, name)
+                end
             end
         end
 
-        if #selected == 0 then
+        if #pending == 0 then
             Print("No players selected.")
             return
+        end
+
+        local function ProcessInvites()
+            local stillPending = {}
+
+            for _, name in ipairs(pending) do
+                if UnitInParty(name) or UnitInRaid(name) then
+                    -- Do not auto-untick; user controls selection
+                else
+                    C_PartyInfo.InviteUnit(name)
+                    table.insert(stillPending, name)
+                end
+            end
+
+            pending = stillPending
+
+            if #pending > 0 then
+                C_Timer.After(1, ProcessInvites)
+            end
         end
 
         local numGroup = GetNumGroupMembers()
         local isRaid = IsInRaid()
 
-        if #selected + numGroup > 4 and not isRaid then
+        if #pending + numGroup > 4 and not isRaid then
             C_PartyInfo.ConvertToRaid()
-        end
-
-        for _, name in ipairs(selected) do
-            if not UnitInParty(name) and not UnitInRaid(name) then
-                C_PartyInfo.InviteUnit(name)
-            end
+            C_Timer.After(1.5, ProcessInvites)
+        else
+            ProcessInvites()
         end
     end)
 
-    ----------------------------------------------------------------
+    ------------------------------------------------------------
     -- INFO TEXT (BOTTOM LEFT)
-    ----------------------------------------------------------------
+    ------------------------------------------------------------
     local info = groupPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-info:SetPoint("BOTTOMLEFT", groupPanel, "BOTTOMLEFT", 10, 10)
-info:SetJustifyH("LEFT")
-info:SetText("|cffaaaaaa*This list is populated from the DKP table and scans every 10 seconds (with the tab open) to check who's online.|r")
+    info:SetPoint("BOTTOMLEFT", groupPanel, "BOTTOMLEFT", 10, 10)
+    info:SetJustifyH("LEFT")
+    info:SetText("|cffaaaaaa*This list is populated from the DKP table and scans every 10 seconds (with the tab open) to check who's online.|r")
 
-    ----------------------------------------------------------------
-    -- PANEL SHOW/HIDE HANDLERS
-    ----------------------------------------------------------------
+    ------------------------------------------------------------
+    -- PANEL SHOW/HIDE
+    ------------------------------------------------------------
     groupPanel:SetScript("OnShow", function()
         RefreshGroupBuilder()
         StartOnlineScan()
@@ -1053,6 +1334,7 @@ end
             RedDKP_Config.editorListVersion = (RedDKP_Config.editorListVersion or 0) + 1
             addBox:SetText("")
             RefreshEditorList()
+			C_ChatInfo.SendAddonMessage(EDITOR_SYNC_PREFIX, "REQUEST", "GUILD")
             BroadcastEditorList()
         end)
 
@@ -1078,6 +1360,7 @@ end
             RedDKP_Config.editorListVersion = (RedDKP_Config.editorListVersion or 0) + 1
             editorsPanel.selectedEditor = nil
             RefreshEditorList()
+			C_ChatInfo.SendAddonMessage(EDITOR_SYNC_PREFIX, "REQUEST", "GUILD")
             BroadcastEditorList()
         end)
 
@@ -1412,12 +1695,13 @@ end
                             inlineEdit:HighlightText()
 
                             inlineEdit.saveFunc = function(newName)
-                                newName = newName:gsub("^%s*(.-)%s*$", "%1")
-                                if newName == "" or newName == playerName then return end
+								newName = newName:gsub("^%s*(.-)%s*$", "%1")
+								if newName == "" or newName == playerName then return end
 
-                                if RedDKP_Data[newName] then
-                                    Print("|cffff5555A player with that name already exists.|r")
-                                    return
+								local oldName = playerName
+								if NameExists(newName, oldName) then
+									Print("|cffff5555A player with that name already exists.|r")
+									return
                                 end
 
                                 RedDKP_Data[newName] = RedDKP_Data[playerName]
@@ -1662,10 +1946,21 @@ local function ApplySyncData(sender, encoded)
         return
     end
 
-    RedDKP_Data = {}
-    for name, dkpEntry in pairs(payload.dkp) do
-        RedDKP_Data[name] = dkpEntry
-    end
+    -- Replace DKP table with sanitized version
+	local cleaned = {}
+
+	for name, dkpEntry in pairs(payload.dkp) do
+		if type(name) == "string" then
+			local trimmed = strtrim(name)
+
+			-- Skip empty or whitespace-only keys
+			if trimmed ~= "" then
+				cleaned[trimmed] = dkpEntry
+			end
+		end
+	end
+
+	RedDKP_Data = cleaned
 
     if payload.smart then
         local existing = {}
@@ -2106,7 +2401,7 @@ eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4, arg5)
             if IsEditor(UnitName("player")) then
                 BroadcastEditorList()
             else
-                C_ChatInfo.SendAddonMessage(EDITOR_REQ_PREFIX, "?", "GUILD")
+                C_ChatInfo.SendAddonMessage(EDITOR_SYNC_PREFIX, "REQUEST", "GUILD")
             end
         end)
 
@@ -2181,6 +2476,19 @@ eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4, arg5)
             OnEditorAddonMessage(prefix, msg, channel, sender)
             return
         end
+		
+		if prefix == "REDDKP_EDITOR_SYNC" then
+			if msg == "REQUEST" then
+			-- Only editors respond
+				if IsEditor(UnitName("player")) then
+					BroadcastEditorList()
+				end
+			elseif msg:sub(1,5) == "DATA:" then
+				-- Parse and apply the editor list
+				local data = msg:sub(6)
+				ApplyEditorList(data)
+			end
+		end
     end
 end)
 
