@@ -26,7 +26,7 @@ Missing functionality I want to add ASAP:
 
 
 Known Bugs:
-1. Addon icon not displaying on the addons list
+1. (Fixed but blurry as all hell) Addon icon not displaying on the addons list
 2. (Fixed) Top row record can show above the window when editing + scrolling
 3. (Possibly Fixed) Audit log is back to showing lots of "unknowns" (display issue the data is there)
 4. SYNC be fooked
