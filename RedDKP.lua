@@ -1901,9 +1901,6 @@ function RedDKP_ResetMinimapButton()
     print("|cff00ff00RedDKP minimap icon reset.|r")
 end
 
-SLASH_REDDKPRESET1 = "/RedDKPminimap"
-SlashCmdList["REDDKPRESET"] = RedDKP_ResetMinimapButton
-
 -- Register minimap icon on addon load
 local f = CreateFrame("Frame")
 f:RegisterEvent("ADDON_LOADED")
@@ -2081,3 +2078,55 @@ StaticPopupDialogs["REDDKP_BROADCAST_DKP"] = {
     whileDead = true,
     hideOnEscape = true,
 }
+
+-- ============================================================
+--  Slash Commands
+-- ============================================================
+
+SLASH_REDDKP1 = "/reddkp"
+SlashCmdList["REDDKP"] = function(msg)
+    msg = (msg or ""):lower():trim()
+
+    -- /reddkp show
+    if msg == "show" then
+        mainFrame:Show()
+        ShowTab(TAB_DKP)
+        return
+    end
+
+    -- /reddkp hide
+    if msg == "hide" then
+        mainFrame:Hide()
+        return
+    end
+
+    -- /reddkp toggle
+    if msg == "toggle" then
+        if mainFrame:IsShown() then
+            mainFrame:Hide()
+        else
+            mainFrame:Show()
+            ShowTab(TAB_DKP)
+        end
+        return
+    end
+
+    -- /reddkp minimap
+    if msg == "minimap" then
+        RedDKP_ResetMinimapButton()
+        return
+    end
+
+    -- /reddkp help  (or just /reddkp)
+    if msg == "help" or msg == "" then
+        print("|cffffd100RedDKP Commands:|r")
+        print("|cff00ff00/reddkp show|r   - Open the DKP window")
+        print("|cff00ff00/reddkp hide|r   - Hide the DKP window")
+        print("|cff00ff00/reddkp toggle|r - Toggle the DKP window")
+        print("|cff00ff00/reddkp minimap|r - Reset minimap icon position")
+        print("|cff00ff00/reddkp help|r   - Show this help list")
+        return
+    end
+
+    print("|cffff5555Unknown command. Use /reddkp help|r")
+end
