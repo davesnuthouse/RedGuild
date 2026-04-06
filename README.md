@@ -32,6 +32,7 @@ Known Bugs:
 5. (Fixed) Clicking away from edit value on DKP table doesnt deslect value (like pressing enter would)
 6. (Fixed) On first load the dkp table displays blank, it takes a /reload for the data to display
 7. It has lost formatting on the editors list due to fixing name sync issues (likely cosmetic)
+8. After fixing 5 the window can nolonger be moved on the DKP tab
 
 
 Features to consider for the distant future:
