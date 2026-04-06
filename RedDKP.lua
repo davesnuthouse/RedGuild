@@ -51,6 +51,53 @@ C_ChatInfo.RegisterAddonMessagePrefix(EDITOR_REQ_PREFIX)
 C_ChatInfo.RegisterAddonMessagePrefix(EDITOR_SYNC_PREFIX)
 C_ChatInfo.RegisterAddonMessagePrefix(VERSION_PREFIX)
 
+--------------------------------------------------
+-- Classic-family Compatibility Layer
+-- (Classic Era, SoD, Hardcore, Wrath/Cata, TBC Anniversary)
+--------------------------------------------------
+
+-- Safe raid conversion
+function RedDKP_ConvertToRaid()
+    -- Classic / TBC Anniversary: global ConvertToRaid()
+    if type(ConvertToRaid) == "function" then
+        return ConvertToRaid()
+    end
+
+    -- Wrath/Cata Classic: C_PartyInfo exists but may not have ConvertToRaid
+    if C_PartyInfo and type(C_PartyInfo.ConvertToRaid) == "function" then
+        return C_PartyInfo.ConvertToRaid()
+    end
+
+    -- If neither exists, do nothing (prevents crashes)
+end
+
+-- Safe invite
+function RedDKP_Invite(name)
+    -- Classic / TBC Anniversary: global InviteUnit()
+    if type(InviteUnit) == "function" then
+        return InviteUnit(name)
+    end
+
+    -- Wrath/Cata Classic: C_PartyInfo.InviteUnit exists
+    if C_PartyInfo and type(C_PartyInfo.InviteUnit) == "function" then
+        return C_PartyInfo.InviteUnit(name)
+    end
+end
+
+-- Safe addon messaging
+function RedDKP_Send(prefix, msg, channel, target)
+    if C_ChatInfo and type(C_ChatInfo.SendAddonMessage) == "function" then
+        return C_ChatInfo.SendAddonMessage(prefix, msg, channel, target)
+    end
+end
+
+-- Safe roster request
+function RedDKP_RequestRoster()
+    if C_GuildInfo and type(C_GuildInfo.GuildRoster) == "function" then
+        return C_GuildInfo.GuildRoster()
+    end
+end
+
 local function Print(msg)
     DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00[RedDKP]|r " .. tostring(msg))
 end
@@ -394,61 +441,82 @@ local function UpdateOnlineEditors()
         return
     end
 
+    -- Always request a fresh roster
     C_GuildInfo.GuildRoster()
 
     local total = GetNumGuildMembers()
-    if total == 0 then return end
 
-    -- Detect whether our own character is present in the roster yet
+    -- TBC Anniversary / Classic: roster often returns 0 for several seconds
+    if total == 0 then
+        C_Timer.After(1, UpdateOnlineEditors)
+        return
+    end
+
     local playerName = Ambiguate(UnitName("player"), "short")
-    local selfFound = false
+    local foundSelf = false
 
+    -- Scan roster for self (Classic bug: sometimes delayed)
     for i = 1, total do
         local name = GetGuildRosterInfo(i)
         if name and Ambiguate(name, "short") == playerName then
-            selfFound = true
+            foundSelf = true
             break
         end
     end
 
-    -- If our own character is not in the roster yet, bail out early
-    if not selfFound then
+    if not foundSelf then
+        -- Roster not fully populated yet
+        C_Timer.After(1, UpdateOnlineEditors)
         return
     end
 
-    -- Now safe to rebuild the online editor list
+    -- Now safe to rebuild online editor list
     wipe(RedDKP_Config.onlineEditors)
 
     for i = 1, total do
-        local name, _, rankIndex, _, _, _, _, _, online = GetGuildRosterInfo(i)
-        if name and rankIndex then
-            local short = Ambiguate(name, "short")      -- REAL character name
-            local key   = NormalizeName(name)           -- normalized key for lookup
+        local name, _, _, _, _, _, _, _, online = GetGuildRosterInfo(i)
+        if name then
+            local short = Ambiguate(name, "short")
+            local key   = NormalizeName(name)
 
+            -- Classic/TBC: online flag is reliable, rankIndex is NOT
             if key and RedDKP_Config.authorizedEditors[key] and online then
-                RedDKP_Config.onlineEditors[short] = rankIndex
+                -- Store short name, rankIndex is ignored (unreliable)
+                RedDKP_Config.onlineEditors[short] = true
             end
         end
     end
 
-    -- Ensure we always include ourselves if we are an editor
-    local selfKey   = NormalizeName(playerName)
-    local shortSelf = Ambiguate(playerName, "short")
-
+    -- Always include self if self is an editor
+    local selfKey = NormalizeName(playerName)
     if RedDKP_Config.authorizedEditors[selfKey] then
-        RedDKP_Config.onlineEditors[shortSelf] =
-            RedDKP_Config.onlineEditors[shortSelf] or 0
+        RedDKP_Config.onlineEditors[playerName] = true
     end
 end
 
 local function GetHighestRankEditor()
     EnsureOnlineEditors()
+
     local bestName = nil
     local bestRank = 99
 
-    for name, rank in pairs(RedDKP_Config.onlineEditors) do
-        if rank < bestRank then
-            bestRank = rank
+    for name in pairs(RedDKP_Config.onlineEditors) do
+        -- Get rankIndex fresh from roster (Classic-safe)
+        local rankIndex = nil
+
+        for i = 1, GetNumGuildMembers() do
+            local gName, _, rIndex = GetGuildRosterInfo(i)
+            if gName and Ambiguate(gName, "short") == name then
+                rankIndex = rIndex
+                break
+            end
+        end
+
+        -- If rankIndex missing, treat as lowest priority (rank 99)
+        rankIndex = rankIndex or 99
+
+        if rankIndex < bestRank then
+            bestRank = rankIndex
             bestName = name
         end
     end
@@ -823,11 +891,14 @@ local function BroadcastEditorList()
         version = RedDKP_Config.editorListVersion or 0,
     }
 
+	payload.version = (payload.version or 0) + 1
+	RedDKP_Config.editorListVersion = payload.version
+
     local serialized = LibSerialize:Serialize(payload)
     local encoded    = LibDeflate:EncodeForWoWAddonChannel(serialized)
 
     local message = "EDITORSYNC:" .. encoded
-    C_ChatInfo.SendAddonMessage(EDITOR_PREFIX, message, "GUILD")
+    RedDKP_Send(EDITOR_PREFIX, message, "GUILD")
 end
 
 local function ApplyEditorList(payload)
@@ -854,7 +925,10 @@ local function ApplyEditorList(payload)
 end
 
 local function OnEditorAddonMessage(prefix, message, channel, sender)
-    -- New LibSerialize-based editor sync
+    sender = Ambiguate(sender or "", "short")
+    local senderKey = NormalizeName(sender)
+
+    -- EDITORSYNC: incoming editor list
     if prefix == EDITOR_PREFIX then
         if message:sub(1, 12) == "EDITORSYNC:" then
             local encoded = message:sub(13)
@@ -865,12 +939,17 @@ local function OnEditorAddonMessage(prefix, message, channel, sender)
             if not ok or type(payload) ~= "table" then return end
 
             ApplyEditorList(payload)
+            UpdateOnlineEditors() -- NEW: refresh immediately
         end
+        return
+    end
 
-    elseif prefix == EDITOR_REQ_PREFIX then
-        if IsGuildOfficer() or IsAuthorized() then
+    -- EDITOR_REQ_PREFIX: someone is asking for the editor list
+    if prefix == EDITOR_REQ_PREFIX then
+        if IsAuthorized() or IsGuildOfficer() then
             BroadcastEditorList()
         end
+        return
     end
 end
 
@@ -1272,28 +1351,19 @@ inviteBtn:SetScript("OnClick", function()
         return
     end
 
-    local numGroup = GetNumGroupMembers()
-    local isRaid = IsInRaid()
-
-    -- Convert to raid if needed
-    if #pending + numGroup > 4 and not isRaid then
-        C_PartyInfo.ConvertToRaid()
-
-        -- Delay slightly so the raid conversion completes
-        C_Timer.After(1.5, function()
-            for _, name in ipairs(pending) do
-                C_PartyInfo.InviteUnit(name)
-            end
-        end)
-
-    else
-        -- Invite everyone once
+    local function InviteAllOnce()
         for _, name in ipairs(pending) do
-            C_PartyInfo.InviteUnit(name)
+            RedDKP_Invite(name)
         end
     end
 
-    -- No retry loop. No repeated invites. Done.
+    -- If not already in a raid, convert first, then invite
+    if not IsInRaid() then
+        RedDKP_ConvertToRaid()
+        C_Timer.After(1.5, InviteAllOnce)
+    else
+        InviteAllOnce()
+    end
 end)
 
     ------------------------------------------------------------
@@ -2223,7 +2293,7 @@ local function HandleSyncRequest(requester, sender, isRequestSync)
     local payload = BuildSyncPayload()
     local encoded = EncodePayload(payload)
 	-- DebugSync(VERSION_PREFIX, "OUT", "GUILD", REDDKP_VERSION)
-    C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "DATA:" .. encoded, "WHISPER", requester)
+    RedDKP_Send(SYNC_PREFIX, "DATA:" .. encoded, "WHISPER", requester)
     Print("Sent sync data to " .. requester)
 end
 
@@ -2238,7 +2308,10 @@ local function HandleSyncResponse(sender, msgType)
 
         local payload = BuildSyncPayload()
         local encoded = EncodePayload(payload)
-        C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "DATA:" .. encoded, "WHISPER", sender)
+
+        -- Always use compatibility-safe send
+        RedDKP_Send(SYNC_PREFIX, "DATA:" .. encoded, "WHISPER", sender)
+
         Print(sender .. " accepted force sync.")
         return
     end
@@ -2259,6 +2332,11 @@ local function AttemptAutoSync()
     EnsureAddonUsers()
 	UpdateOnlineEditors()
     EnsureOnlineEditors()
+
+	if not next(RedDKP_Config.authorizedEditors) then
+		SafeSetSyncWarning("Waiting for editor list...")
+		return
+	end
 
     -- Normalized local player name
     local me = NormalizeName(UnitName("player"))
@@ -2305,7 +2383,7 @@ local function AttemptAutoSync()
 
     -- Request sync from the highest‑rank online editor
 	-- DebugSync(VERSION_PREFIX, "OUT", "GUILD", REDDKP_VERSION)
-    C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "REQUEST:" .. me, "WHISPER", bestEditor)
+    RedDKP_Send(SYNC_PREFIX, "REQUEST:" .. me, "WHISPER", bestEditor)
     Print("Requesting automatic sync from " .. bestEditor .. "...")
 end
 
@@ -2327,7 +2405,7 @@ StaticPopupDialogs["REDDKP_FORCE_SYNC_CONFIRM"] = {
         for name in pairs(RedDKP_Config.addonUsers) do
             if name ~= me and UnitIsConnected(name) and UnitInGuild(name) then
                 RedDKP_ForceSyncStatus.total = RedDKP_ForceSyncStatus.total + 1
-                C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "FORCE_REQ:" .. me, "WHISPER", name)
+                RedDKP_Send(SYNC_PREFIX, "FORCE_REQ:" .. me, "WHISPER", name)
             end
         end
 
@@ -2578,12 +2656,15 @@ if event == "PLAYER_LOGIN" then
         if not IsInGuild() then return end
 
         -- Version ping to guild
-        C_ChatInfo.SendAddonMessage(VERSION_PREFIX, REDDKP_VERSION, "GUILD")
+        RedDKP_Send(VERSION_PREFIX, REDDKP_VERSION, "GUILD")
 
         -- If this player is an editor, broadcast editor list
         if IsEditor(UnitName("player")) then
             BroadcastEditorList()
         end
+		
+		-- Always request editor list on login (Classic/TBC safe)
+		RedDKP_Send(EDITOR_REQ_PREFIX, "REQ", "GUILD")
 
         -- Attempt auto-sync for non-editors
         AttemptAutoSync()
@@ -2622,6 +2703,11 @@ end
                     UpdateTable()
 					RedDKP_SyncLocked = false
 					SafeSetSyncWarning("")
+					
+					-- First time roster is truly ready: attempt auto-sync for non-editors
+					if not IsAuthorized() and not IsGuildOfficer() then
+						AttemptAutoSync()
+					end
                 end
             end
         end
