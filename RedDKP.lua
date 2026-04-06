@@ -2319,15 +2319,16 @@ eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4, arg5)
             end
         end
 
-        CreateUI()
         icon:Register("RedDKP", LDB, RedDKP_Config.minimap)
 
-        Print("Loaded.")
         return
     end
 
     if event == "PLAYER_LOGIN" then
 		CheckGuildRestriction()
+		CreateUI()
+
+		Print("REDDKP Loaded.")
 
 		C_Timer.After(3, function()
 			if C_ChatInfo.SendAddonMessage then
