@@ -19,7 +19,8 @@ Missing functionality I want to add ASAP:
 9. A warning to the RL/ML that they have to allocate Attendance DKP before people leave the group
 10. (Done) Restore the chat window slash commmands
 11. (Done) Balance field shouldn't be able to be edited
-12. Add button to RL Tools to allocate bench aware
+12. Add button to RL Tools to allocate bench award
+13. Add to the group builder info window a counter of how many people are in your group/raid and who is not from the selected users
 
 
 Known Bugs:
