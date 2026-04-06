@@ -33,7 +33,7 @@ Known Bugs:
 6. (Fixed) On first load the dkp table displays blank, it takes a /reload for the data to display
 7. It has lost formatting on the editors list due to fixing name sync issues (likely cosmetic)
 8. After fixing 5 the window can nolonger be moved on the DKP tab
-9. The group invites spams the user untill they accept the invite rather than once
+9. (Fixed) The group invites spams the user untill they accept the invite rather than once
 
 
 Features to consider for the distant future:
