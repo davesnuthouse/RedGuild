@@ -22,8 +22,6 @@ local EDITOR_SYNC_PREFIX 	= "REDDKP_EDITOR_SYNC"
 local EDITOR_REQ_PREFIX     = "REDDKP_EDITORS_REQ"
 local VERSION_PREFIX 		= "REDDKP_VER"
 
-local chatReady = false
-
 RedDKP_Config.smartSync      = (RedDKP_Config.smartSync ~= false)
 RedDKP_Config.addonUsers     = RedDKP_Config.addonUsers     or {}
 RedDKP_Config.onlineEditors  = RedDKP_Config.onlineEditors  or {}
@@ -45,6 +43,13 @@ local activeTab = TAB_DKP
 
 local SORT_COLOR   = "|cff3399ff"
 local NORMAL_COLOR = "|cffffffff"
+
+-- Register addon message prefixes immediately on load
+C_ChatInfo.RegisterAddonMessagePrefix(SYNC_PREFIX)
+C_ChatInfo.RegisterAddonMessagePrefix(EDITOR_PREFIX)
+C_ChatInfo.RegisterAddonMessagePrefix(EDITOR_REQ_PREFIX)
+C_ChatInfo.RegisterAddonMessagePrefix(EDITOR_SYNC_PREFIX)
+C_ChatInfo.RegisterAddonMessagePrefix(VERSION_PREFIX)
 
 local function Print(msg)
     DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00[RedDKP]|r " .. tostring(msg))
@@ -383,20 +388,56 @@ end
 
 local function UpdateOnlineEditors()
     EnsureOnlineEditors()
+
+    if not IsInGuild() then
+        wipe(RedDKP_Config.onlineEditors)
+        return
+    end
+
+    C_GuildInfo.GuildRoster()
+
+    local total = GetNumGuildMembers()
+    if total == 0 then return end
+
+    -- Detect whether our own character is present in the roster yet
+    local playerName = Ambiguate(UnitName("player"), "short")
+    local selfFound = false
+
+    for i = 1, total do
+        local name = GetGuildRosterInfo(i)
+        if name and Ambiguate(name, "short") == playerName then
+            selfFound = true
+            break
+        end
+    end
+
+    -- If our own character is not in the roster yet, bail out early
+    if not selfFound then
+        return
+    end
+
+    -- Now safe to rebuild the online editor list
     wipe(RedDKP_Config.onlineEditors)
 
-    if not IsInGuild() then return end
-	
-	C_GuildInfo.GuildRoster()
-
-    for i = 1, GetNumGuildMembers() do
+    for i = 1, total do
         local name, _, rankIndex, _, _, _, _, _, online = GetGuildRosterInfo(i)
-        if name and online then
-            local key = NormalizeName(name)
-			if key and RedDKP_Config.authorizedEditors[key] then
-				RedDKP_Config.onlineEditors[key] = rankIndex
-			end
+        if name and rankIndex then
+            local short = Ambiguate(name, "short")      -- REAL character name
+            local key   = NormalizeName(name)           -- normalized key for lookup
+
+            if key and RedDKP_Config.authorizedEditors[key] and online then
+                RedDKP_Config.onlineEditors[short] = rankIndex
+            end
         end
+    end
+
+    -- Ensure we always include ourselves if we are an editor
+    local selfKey   = NormalizeName(playerName)
+    local shortSelf = Ambiguate(playerName, "short")
+
+    if RedDKP_Config.authorizedEditors[selfKey] then
+        RedDKP_Config.onlineEditors[shortSelf] =
+            RedDKP_Config.onlineEditors[shortSelf] or 0
     end
 end
 
@@ -413,6 +454,14 @@ local function GetHighestRankEditor()
     end
 
     return bestName
+end
+
+local function DebugSync(prefix, direction, sender, msg)
+    print("|cff00ff00[SYNC-DEBUG]|r",
+        direction,
+        prefix,
+        sender or "",
+        msg or "")
 end
 
 local tabs = {}
@@ -1199,58 +1248,53 @@ end
     ------------------------------------------------------------
     -- INVITE BUTTON (NO AUTO-UNTICK)
     ------------------------------------------------------------
-    local inviteBtn = CreateFrame("Button", nil, groupPanel, "UIPanelButtonTemplate")
-    inviteBtn:SetSize(140, 24)
-    inviteBtn:SetText("Invite to Group")
-    inviteBtn:SetPoint("BOTTOMRIGHT", groupPanel, "BOTTOMRIGHT", -10, 10)
+local inviteBtn = CreateFrame("Button", nil, groupPanel, "UIPanelButtonTemplate")
+inviteBtn:SetSize(140, 24)
+inviteBtn:SetText("Invite to Group")
+inviteBtn:SetPoint("BOTTOMRIGHT", groupPanel, "BOTTOMRIGHT", -10, 10)
 
-    inviteBtn:SetScript("OnClick", function()
-        local pending = {}
-        local playerName = Ambiguate(UnitName("player"), "short")
+inviteBtn:SetScript("OnClick", function()
+    local pending = {}
+    local playerName = Ambiguate(UnitName("player"), "short")
 
-        for _, row in ipairs(groupRows) do
-            if row:IsShown() and row.checkbox:GetChecked() then
-                local name = row.name
-                if name ~= playerName and not UnitInParty(name) and not UnitInRaid(name) then
-                    table.insert(pending, name)
-                end
+    -- Build list of players to invite
+    for _, row in ipairs(groupRows) do
+        if row:IsShown() and row.checkbox:GetChecked() then
+            local name = row.name
+            if name ~= playerName and not UnitInParty(name) and not UnitInRaid(name) then
+                table.insert(pending, name)
             end
         end
+    end
 
-        if #pending == 0 then
-            Print("No players selected.")
-            return
-        end
+    if #pending == 0 then
+        Print("No players selected.")
+        return
+    end
 
-        local function ProcessInvites()
-            local stillPending = {}
+    local numGroup = GetNumGroupMembers()
+    local isRaid = IsInRaid()
 
+    -- Convert to raid if needed
+    if #pending + numGroup > 4 and not isRaid then
+        C_PartyInfo.ConvertToRaid()
+
+        -- Delay slightly so the raid conversion completes
+        C_Timer.After(1.5, function()
             for _, name in ipairs(pending) do
-                if UnitInParty(name) or UnitInRaid(name) then
-                    -- Do not auto-untick; user controls selection
-                else
-                    C_PartyInfo.InviteUnit(name)
-                    table.insert(stillPending, name)
-                end
+                C_PartyInfo.InviteUnit(name)
             end
+        end)
 
-            pending = stillPending
-
-            if #pending > 0 then
-                C_Timer.After(1, ProcessInvites)
-            end
+    else
+        -- Invite everyone once
+        for _, name in ipairs(pending) do
+            C_PartyInfo.InviteUnit(name)
         end
+    end
 
-        local numGroup = GetNumGroupMembers()
-        local isRaid = IsInRaid()
-
-        if #pending + numGroup > 4 and not isRaid then
-            C_PartyInfo.ConvertToRaid()
-            C_Timer.After(1.5, ProcessInvites)
-        else
-            ProcessInvites()
-        end
-    end)
+    -- No retry loop. No repeated invites. Done.
+end)
 
     ------------------------------------------------------------
     -- INFO TEXT (BOTTOM LEFT)
@@ -2012,7 +2056,40 @@ end
         requestBtn:SetText("Request SYNC")
         requestBtn:SetPoint("BOTTOMRIGHT", dkpPanel, "BOTTOMRIGHT", -10, 10)
         requestBtn:SetScript("OnClick", function()
-        end)
+    EnsureSaved()
+    EnsureOnlineEditors()
+    UpdateOnlineEditors()
+
+    local me = NormalizeName(UnitName("player"))
+    if not me then
+        Print("Unable to determine your character name for sync.")
+        return
+    end
+
+    if IsAuthorized() or IsGuildOfficer() then
+        Print("You are an editor/officer — you don't need to request sync.")
+        return
+    end
+
+    if RedDKP_SyncLocked then
+        Print("Sync is currently locked. Please wait a few seconds and try again.")
+        return
+    end
+
+    if not IsInGuild() or GetNumGuildMembers() == 0 then
+        Print("Guild roster not ready — cannot request sync yet.")
+        return
+    end
+
+    local bestEditor = GetHighestRankEditor()
+    if not bestEditor then
+        Print("No editor online — cannot request sync.")
+        return
+    end
+
+    C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "REQUEST:" .. me, "WHISPER", bestEditor)
+    Print("Manual sync request sent to " .. bestEditor .. ".")
+end)
 
         local forceBtn = CreateFrame("Button", nil, dkpPanel, "UIPanelButtonTemplate")
         forceBtn:SetSize(120, 24)
@@ -2145,6 +2222,7 @@ local function HandleSyncRequest(requester, sender, isRequestSync)
 
     local payload = BuildSyncPayload()
     local encoded = EncodePayload(payload)
+	-- DebugSync(VERSION_PREFIX, "OUT", "GUILD", REDDKP_VERSION)
     C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "DATA:" .. encoded, "WHISPER", requester)
     Print("Sent sync data to " .. requester)
 end
@@ -2179,6 +2257,7 @@ end
 local function AttemptAutoSync()
     EnsureSaved()
     EnsureAddonUsers()
+	UpdateOnlineEditors()
     EnsureOnlineEditors()
 
     -- Normalized local player name
@@ -2225,6 +2304,7 @@ local function AttemptAutoSync()
     end
 
     -- Request sync from the highest‑rank online editor
+	-- DebugSync(VERSION_PREFIX, "OUT", "GUILD", REDDKP_VERSION)
     C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "REQUEST:" .. me, "WHISPER", bestEditor)
     Print("Requesting automatic sync from " .. bestEditor .. "...")
 end
@@ -2439,13 +2519,7 @@ eventFrame:RegisterEvent("ADDON_LOADED")
 eventFrame:RegisterEvent("PLAYER_LOGIN")
 eventFrame:RegisterEvent("GUILD_ROSTER_UPDATE")
 eventFrame:RegisterEvent("PLAYER_GUILD_UPDATE")
-eventFrame:RegisterEvent("CHAT_MSG_CHANNEL_NOTICE")
 eventFrame:RegisterEvent("CHAT_MSG_ADDON")
-
-C_ChatInfo.RegisterAddonMessagePrefix(SYNC_PREFIX)
-C_ChatInfo.RegisterAddonMessagePrefix(EDITOR_PREFIX)
-C_ChatInfo.RegisterAddonMessagePrefix(EDITOR_REQ_PREFIX)
-C_ChatInfo.RegisterAddonMessagePrefix(VERSION_PREFIX)
 
 eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4, arg5)
 
@@ -2492,15 +2566,31 @@ eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4, arg5)
     ---------------------------------------------------------
     -- 2. PLAYER_LOGIN
     ---------------------------------------------------------
-    if event == "PLAYER_LOGIN" then
-        CheckGuildRestriction()
-        CreateUI()
 
-        -- IMPORTANT: No sync messaging here anymore.
-        -- Sync messaging now waits for Guild channel join.
-        return
-    end
+if event == "PLAYER_LOGIN" then
+    CheckGuildRestriction()
+    CreateUI()
+    UpdateOnlineEditors()
+    C_GuildInfo.GuildRoster()
 
+    -- Small delay to let roster/chat settle, then do version + auto-sync
+    C_Timer.After(3, function()
+        if not IsInGuild() then return end
+
+        -- Version ping to guild
+        C_ChatInfo.SendAddonMessage(VERSION_PREFIX, REDDKP_VERSION, "GUILD")
+
+        -- If this player is an editor, broadcast editor list
+        if IsEditor(UnitName("player")) then
+            BroadcastEditorList()
+        end
+
+        -- Attempt auto-sync for non-editors
+        AttemptAutoSync()
+    end)
+
+    return
+end
 
     ---------------------------------------------------------
     -- 3. GUILD_ROSTER_UPDATE / PLAYER_GUILD_UPDATE
@@ -2530,6 +2620,8 @@ eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4, arg5)
 
                     -- Now safely build the DKP table
                     UpdateTable()
+					RedDKP_SyncLocked = false
+					SafeSetSyncWarning("")
                 end
             end
         end
@@ -2539,30 +2631,9 @@ eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4, arg5)
 
 
     ---------------------------------------------------------
-    -- 4. CHAT_MSG_CHANNEL_NOTICE  (Guild channel join detection)
+    -- 4. REMOVED DURING ATTEMPT TO FIX SYNC (WAS CHAT_MSG_CHANNEL_NOTICE)
     ---------------------------------------------------------
-    if event == "CHAT_MSG_CHANNEL_NOTICE" then
-        local notice = arg1
-        local channelName = arg4
 
-        -- Detect when the player actually joins the Guild channel
-        if channelName == "Guild" and notice == "YOU_JOINED" then
-            chatReady = true
-
-            -- Now safe to send version ping
-            C_ChatInfo.SendAddonMessage(VERSION_PREFIX, REDDKP_VERSION, "GUILD")
-
-            -- If this player is an editor, broadcast editor list
-            if IsEditor(UnitName("player")) then
-                BroadcastEditorList()
-            end
-
-            -- Now safe to attempt auto-sync
-            AttemptAutoSync()
-        end
-
-        return
-    end
 
 
     ---------------------------------------------------------
@@ -2573,6 +2644,8 @@ eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4, arg5)
         if not msg or not sender then return end
 
         sender = Ambiguate(sender, "short")
+
+		--DebugSync(prefix, "IN", sender, msg)
 
         -----------------------------------------------------
         -- SYNC_PREFIX (REQUEST, FORCE_REQ, DATA, etc.)
