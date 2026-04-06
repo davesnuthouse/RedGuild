@@ -926,6 +926,17 @@ local function CreateUI()
     -- PANELS
     --------------------------------------------------------------------
     dkpPanel     = CreateFrame("Frame", nil, mainFrame); LayoutPanel(dkpPanel)
+	-- Clicking anywhere on the DKP panel commits inline edits
+	dkpPanel:EnableMouse(true)
+	dkpPanel:SetScript("OnMouseDown", function()
+		if inlineEdit and inlineEdit:IsShown() then
+			inlineEdit.cancelled = false
+			if inlineEdit.saveFunc then
+				inlineEdit.saveFunc(inlineEdit:GetText())
+			end
+			inlineEdit:Hide()
+		end
+	end)
     groupPanel   = CreateFrame("Frame", nil, mainFrame); LayoutPanel(groupPanel)
     raidPanel    = CreateFrame("Frame", nil, mainFrame); LayoutPanel(raidPanel)
     editorsPanel = CreateFrame("Frame", nil, mainFrame); LayoutPanel(editorsPanel)
