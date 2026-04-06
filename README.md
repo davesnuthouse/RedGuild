@@ -38,3 +38,4 @@ Features to consider for the distant future:
 4. (Done - because someone speshul wanted this most) Mass Invite functionality
 5. Raid group planner?
 6. Some way to record players roles
+7. ML whiteboard
