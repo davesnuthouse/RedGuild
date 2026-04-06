@@ -2473,9 +2473,6 @@ eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4, arg5)
     if event == "PLAYER_LOGIN" then
 		CheckGuildRestriction()
 		CreateUI()
-		UpdateTable()
-
-		Print("REDDKP Loaded.")
 
 		C_Timer.After(5, function()
 			if C_ChatInfo.SendAddonMessage then
@@ -2508,11 +2505,37 @@ eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4, arg5)
 		return
 	end
 	
-    if event == "GUILD_ROSTER_UPDATE" or event == "PLAYER_GUILD_UPDATE" then
-        CheckGuildRestriction()
-        UpdateOnlineEditors()
-        return
-    end
+		if event == "GUILD_ROSTER_UPDATE" or event == "PLAYER_GUILD_UPDATE" then
+		CheckGuildRestriction()
+		UpdateOnlineEditors()
+
+		-- Only treat this as "ready" when we actually have data
+		if not firstRosterReady then
+			if IsInGuild() and GetNumGuildMembers() > 0 then
+				local anyName = select(1, GetGuildRosterInfo(1))
+				if anyName then
+					firstRosterReady = true
+
+					-- Populate class data now that roster is real
+					for i = 1, GetNumGuildMembers() do
+						local gName, _, _, _, _, _, _, _, _, _, gClass = GetGuildRosterInfo(i)
+						if gName and gClass then
+							gName = Ambiguate(gName, "short")
+							local d = RedDKP_Data[gName]
+							if d then
+								d.class = gClass
+							end
+						end
+					end
+
+					-- Now safely build the DKP table
+					UpdateTable()
+				end
+        end
+		end
+
+		return
+	end
 
 	if event == "CHAT_MSG_ADDON" then
 		local prefix, msg, channel, sender = arg1, arg2, arg3, arg4
