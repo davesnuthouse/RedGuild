@@ -29,6 +29,7 @@ Known Bugs:
 4. (Fixed) Minimap button being a twat (needs a full rebuild and Lib file)
 5. Clicking away from edit value on DKP table doesnt deslect value (like pressing enter would)
 6. (Partially fixed - it's a time issue) On first load the dkp table displays blank, it takes a /reload for the data to display
+7. It has lost formatting on the editors list due to fixing name sync issues (likely cosmetic)
 
 
 Features to consider for the distant future:
@@ -37,5 +38,5 @@ Features to consider for the distant future:
 3. Full support for DKP bidding
 4. (Done - because someone speshul wanted this most) Mass Invite functionality
 5. Raid group planner?
-6. Some way to record players roles
+6. (Done) Some way to record players roles
 7. ML whiteboard
