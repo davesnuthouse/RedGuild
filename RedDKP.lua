@@ -16,11 +16,11 @@ local addonName      = ...
 local REDDKP_VERSION = "1.0.0"
 
 
-local SYNC_PREFIX    		= "REDDKP_SYNC"
-local EDITOR_PREFIX         = "REDDKP_EDITORS"
-local EDITOR_SYNC_PREFIX 	= "REDDKP_EDITOR_SYNC"
-local EDITOR_REQ_PREFIX     = "REDDKP_EDITORS_REQ"
-local VERSION_PREFIX 		= "REDDKP_VER"
+local SYNC_PREFIX = "REDDKP_SP"
+local EDITOR_PREFIX = "REDDKP_EP"
+local EDITOR_SYNC_PREFIX = "REDDKP_ESP"
+local EDITOR_REQ_PREFIX = "REDDKP_RP"
+local VERSION_PREFIX = "REDDKP_VP"
 
 RedDKP_Config.smartSync      = (RedDKP_Config.smartSync ~= false)
 RedDKP_Config.addonUsers     = RedDKP_Config.addonUsers     or {}
@@ -47,7 +47,12 @@ local NORMAL_COLOR = "|cffffffff"
 local LibSerialize = LibStub("LibSerialize")
 local LibDeflate   = LibStub("LibDeflate")
 
-RedDKP_Debug = false
+local protectedInitialized = false
+
+--------------------------------------------------
+-- DEBUGGING
+--------------------------------------------------
+RedDKP_Debug = true
 local function D(msg)
     if RedDKP_Debug then
         print("|cff00ff00[RedDKP DEBUG]|r " .. msg)
@@ -60,68 +65,59 @@ local function CountKeys(t)
     return c
 end
 
--- Register addon message prefixes immediately on load
-C_ChatInfo.RegisterAddonMessagePrefix(SYNC_PREFIX)
-C_ChatInfo.RegisterAddonMessagePrefix(EDITOR_PREFIX)
-C_ChatInfo.RegisterAddonMessagePrefix(EDITOR_REQ_PREFIX)
-C_ChatInfo.RegisterAddonMessagePrefix(EDITOR_SYNC_PREFIX)
-C_ChatInfo.RegisterAddonMessagePrefix(VERSION_PREFIX)
-
 --------------------------------------------------
 -- Classic-family Compatibility Layer
--- (Classic Era, SoD, Hardcore, Wrath/Cata, TBC Anniversary)
 --------------------------------------------------
 
--- Safe raid conversion
 function RedDKP_ConvertToRaid()
-    -- Classic / TBC Anniversary: global ConvertToRaid()
     if type(ConvertToRaid) == "function" then
         return ConvertToRaid()
     end
 
-    -- Wrath/Cata Classic: C_PartyInfo exists but may not have ConvertToRaid
     if C_PartyInfo and type(C_PartyInfo.ConvertToRaid) == "function" then
         return C_PartyInfo.ConvertToRaid()
     end
-
-    -- If neither exists, do nothing (prevents crashes)
 end
 
--- Safe invite
 function RedDKP_Invite(name)
-    -- Classic / TBC Anniversary: global InviteUnit()
     if type(InviteUnit) == "function" then
         return InviteUnit(name)
     end
 
-    -- Wrath/Cata Classic: C_PartyInfo.InviteUnit exists
     if C_PartyInfo and type(C_PartyInfo.InviteUnit) == "function" then
         return C_PartyInfo.InviteUnit(name)
     end
 end
 
--- Safe addon messaging
 function RedDKP_Send(prefix, msg, channel, target)
-    D("RedDKP_Send called: prefix="..tostring(prefix)..
-      " msg="..tostring(msg)..
-      " channel="..tostring(channel)..
-      " target="..tostring(target))
+    local ok
 
-    if C_ChatInfo and type(C_ChatInfo.SendAddonMessage) == "function" then
-        local ok = C_ChatInfo.SendAddonMessage(prefix, msg, channel, target)
-        D("SendAddonMessage returned: "..tostring(ok))
-        return ok
+    if C_ChatInfo and C_ChatInfo.SendAddonMessage then
+        ok = C_ChatInfo.SendAddonMessage(prefix, msg, channel, target)
+    elseif SendAddonMessage then
+        ok = SendAddonMessage(prefix, msg, channel, target)
     end
 
-    D("SendAddonMessage NOT AVAILABLE on this client")
+    DEFAULT_CHAT_FRAME:AddMessage(
+        "|cffff0000[RedDKP SENDDBG]|r prefix="..tostring(prefix)..
+        " msg="..tostring(msg)..
+        " channel="..tostring(channel)..
+        " target="..tostring(target)..
+        " ok="..tostring(ok)
+    )
+
+    return ok
 end
 
--- Safe roster request
 function RedDKP_RequestRoster()
     if C_GuildInfo and type(C_GuildInfo.GuildRoster) == "function" then
         return C_GuildInfo.GuildRoster()
     end
 end
+
+--------------------------------------------------
+-- Basic Helpers
+--------------------------------------------------
 
 local function Print(msg)
     DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00[RedDKP]|r " .. tostring(msg))
@@ -151,11 +147,14 @@ local function EnsurePlayer(name)
     return RedDKP_Data[name]
 end
 
+--------------------------------------------------
+-- Guild / Name Utilities
+--------------------------------------------------
+
 local function CheckGuildRestriction()
     local guildName = GetGuildInfo("player")
 
     if guildName == nil then
-        -- Guild info not ready yet, wait for update
         return
     end
 
@@ -173,7 +172,21 @@ local function IsGuildOfficer()
     return rankIndex == 0 or rankIndex == 1
 end
 
+local function GetGuildLeader()
+    if not IsInGuild() then return nil end
+    for i = 1, GetNumGuildMembers() do
+        local name, _, rankIndex = GetGuildRosterInfo(i)
+        if name and rankIndex == 0 then
+            return Ambiguate(name, "short")
+        end
+    end
+    return nil
+end
 
+local function ShortName(name)
+    if not name then return nil end
+    return name:match("^[^-]+")
+end
 
 local function RecalcBalance(d)
     d.balance = (d.lastWeek or 0)
@@ -209,20 +222,15 @@ local function GenerateAuditID()
     return tostring(time()) .. "-" .. math.random(100000, 999999)
 end
 
-local function ShortName(name)
-    if not name then return nil end
-    return name:match("^[^-]+")
-end
-
 local function ColorizeBalance(value)
     value = tonumber(value) or 0
 
     if value > 0 then
-        return "|cff00ff00" .. value .. "|r"   -- green
+        return "|cff00ff00" .. value .. "|r"
     elseif value < 0 then
-        return "|cffff0000" .. value .. "|r"   -- red
+        return "|cffff0000" .. value .. "|r"
     else
-        return tostring(value)                 -- neutral
+        return tostring(value)
     end
 end
 
@@ -262,7 +270,6 @@ function LogAudit(player, field, old, new)
         return
     end
 
-    -- Only block non‑editors AFTER editor list is synced
     if RedDKP_Config.authorizedEditors and next(RedDKP_Config.authorizedEditors) then
         if not IsEditor(UnitName("player")) then
             return
@@ -278,17 +285,6 @@ function LogAudit(player, field, old, new)
         old    = old,
         new    = new,
     })
-end
-
-local function GetGuildLeader()
-    if not IsInGuild() then return nil end
-    for i = 1, GetNumGuildMembers() do
-        local name, _, rankIndex = GetGuildRosterInfo(i)
-        if name and rankIndex == 0 then
-            return Ambiguate(name, "short")
-        end
-    end
-    return nil
 end
 
 local function IsNameInGuild(name)
@@ -333,41 +329,20 @@ local function IsRaidLeaderOrMasterLooter()
 end
 
 local function NameExists(newName, oldName)
-    -- Trim whitespace
     newName = strtrim(newName)
 
-    -- If the new name is empty, treat it as non-existent
     if newName == "" then
         return false
     end
 
-    -- Normalize for comparison
     local newLower = strlower(newName)
 
     for name, d in pairs(RedDKP_Data) do
-
-        --------------------------------------------------------
-        -- SKIP INVALID OR CORRUPTED DKP KEYS
-        --------------------------------------------------------
         if type(name) == "string" then
             local trimmed = strtrim(name)
-
-            -- Skip empty or whitespace-only keys
             if trimmed ~= "" then
-
-                ------------------------------------------------
-                -- SKIP THE ENTRY BEING EDITED
-                ------------------------------------------------
                 if trimmed ~= oldName then
-
-                    ------------------------------------------------
-                    -- SKIP INVALID DKP ENTRIES
-                    ------------------------------------------------
                     if not d.invalid then
-
-                        ------------------------------------------------
-                        -- CASE-INSENSITIVE COMPARE
-                        ------------------------------------------------
                         if strlower(trimmed) == newLower then
                             return true
                         end
@@ -409,7 +384,6 @@ local function CompareVersions(localVer, remoteVer)
 end
 
 local function ParseAuditTime(t)
-    -- t = "YYYY-MM-DD HH:MM:SS"
     local year, month, day, hour, min, sec = t:match("(%d+)%-(%d+)%-(%d+) (%d+):(%d+):(%d+)")
     return time({
         year = year,
@@ -433,7 +407,6 @@ local function BroadcastNext(names, index)
 
     SendChatMessage(msg, "RAID")
 
-    -- throttle to avoid server dropping messages
     C_Timer.After(0.15, function()
         BroadcastNext(names, index + 1)
     end)
@@ -442,8 +415,8 @@ end
 local function MarkAddonUserOnline(name)
     EnsureAddonUsers()
     local key = NormalizeName(name)
-	if not key then return end
-	RedDKP_Config.addonUsers[key] = true
+    if not key then return end
+    RedDKP_Config.addonUsers[key] = true
 end
 
 local function ClearOfflineAddonUsers()
@@ -452,6 +425,26 @@ local function ClearOfflineAddonUsers()
         if not UnitIsConnected(name) then
             RedDKP_Config.addonUsers[name] = nil
         end
+    end
+end
+
+local function EnsureProtectedEditor()
+    RedDKP_Config.authorizedEditors = RedDKP_Config.authorizedEditors or {}
+
+    local guildLeader = ShortName(GetGuildLeader())
+    if guildLeader then
+        local key = NormalizeName(guildLeader)
+        if key then
+            RedDKP_Config.authorizedEditors[key] = true
+            RedDKP_Config.protectedEditor = key
+            return
+        end
+    end
+
+    if not next(RedDKP_Config.authorizedEditors) then
+        local me = NormalizeName(UnitName("player"))
+        RedDKP_Config.authorizedEditors[me] = true
+        RedDKP_Config.protectedEditor = me
     end
 end
 
@@ -470,33 +463,26 @@ local function UpdateOnlineEditors()
         return
     end
 
-    -- Reset online editors
     RedDKP_Config.onlineEditors = {}
 
     for i = 1, total do
         local name, _, rankIndex, _, _, _, _, _, online = GetGuildRosterInfo(i)
 
         if name then
-            -- REAL Blizzard name (case‑correct, accents intact)
             local realName = Ambiguate(name, "short")
-
-            -- Normalized key for internal lookups
             local short = NormalizeName(realName)
 
-            -- Is this person an authorized editor?
             if RedDKP_Config.authorizedEditors[short] then
                 if online then
-                    -- Store REAL name + rankIndex
                     RedDKP_Config.onlineEditors[short] = {
-                        name = realName,      -- "Lunátic"
-                        rankIndex = rankIndex -- 0 = GM, 1 = Officer, etc.
+                        name = realName,
+                        rankIndex = rankIndex
                     }
                 end
             end
         end
     end
 
-    -- Debug count
     local count = 0
     for _ in pairs(RedDKP_Config.onlineEditors) do count = count + 1 end
     D("Online editors detected: " .. count)
@@ -506,17 +492,16 @@ local function GetHighestRankEditor()
     D("GetHighestRankEditor called")
     EnsureOnlineEditors()
 
-    local bestName = nil        -- REAL name for whispering
+    local bestName = nil
     local bestRank = 99
 
     for short, info in pairs(RedDKP_Config.onlineEditors) do
-        -- info.name is the REAL roster name (e.g. "Lunátic")
         local realName = info.name
         local rankIndex = info.rankIndex or 99
 
         if rankIndex < bestRank then
             bestRank = rankIndex
-            bestName = realName   -- THIS is what we whisper to
+            bestName = realName
         end
     end
 
@@ -567,14 +552,14 @@ function ShowTab(id)
     end
 
     dkpPanel:Hide()
-	groupPanel:Hide()
+    groupPanel:Hide()
     raidPanel:Hide()
     editorsPanel:Hide()
     auditPanel:Hide()
 
     if id == TAB_DKP then
         dkpPanel:Show()
-	elseif id == TAB_GROUP then
+    elseif id == TAB_GROUP then
         groupPanel:Show()
     elseif id == TAB_RAID then
         raidPanel:Show()
@@ -966,17 +951,9 @@ local function RefreshEditorList()
         return
     end
 
+    -- UI ONLY: determine who should be coloured as protected
     local guildLeader = ShortName(GetGuildLeader())
-    local PROTECTED_USER = guildLeader
     local fallback = ShortName(UnitName("player"))
-
-    if PROTECTED_USER then
-		local key = NormalizeName(PROTECTED_USER)
-		if key then RedDKP_Config.authorizedEditors[key] = true end
-	elseif fallback then
-		local key = NormalizeName(fallback)
-		if key then RedDKP_Config.authorizedEditors[key] = true end
-	end
 
     local nameSet = {}
 
@@ -1065,6 +1042,7 @@ local function CreateUI()
     dkpPanel     = CreateFrame("Frame", nil, mainFrame); LayoutPanel(dkpPanel)
 	-- Clicking anywhere on the DKP panel commits inline edits
 	dkpPanel:EnableMouse(true)
+	dkpPanel:SetPropagateMouseClicks(true)
 	dkpPanel:SetScript("OnMouseDown", function()
 		if inlineEdit and inlineEdit:IsShown() then
 			inlineEdit.cancelled = false
@@ -2131,39 +2109,70 @@ end
         requestBtn:SetSize(120, 24)
         requestBtn:SetText("Request SYNC")
         requestBtn:SetPoint("BOTTOMRIGHT", dkpPanel, "BOTTOMRIGHT", -10, 10)
-        requestBtn:SetScript("OnClick", function()
+requestBtn:SetScript("OnClick", function()
     EnsureSaved()
     EnsureOnlineEditors()
     UpdateOnlineEditors()
 
     local me = NormalizeName(UnitName("player"))
     if not me then
+        Print("DEBUG: me=nil — NormalizeName or UnitName failed")
         Print("Unable to determine your character name for sync.")
         return
     end
+    Print("DEBUG: me=" .. tostring(me))
 
-    if IsAuthorized() or IsGuildOfficer() then
+    if IsAuthorized() then
+        Print("DEBUG: IsAuthorized=true — user is flagged as editor")
         Print("You are an editor/officer — you don't need to request sync.")
         return
     end
 
-    if RedDKP_SyncLocked then
-        Print("Sync is currently locked. Please wait a few seconds and try again.")
+    if IsGuildOfficer() then
+        Print("DEBUG: IsGuildOfficer=true — user is being detected as officer")
+        Print("You are an editor/officer — you don't need to request sync.")
         return
     end
 
-    if not IsInGuild() or GetNumGuildMembers() == 0 then
+    Print("DEBUG: IsAuthorized=" .. tostring(IsAuthorized()) ..
+          " IsGuildOfficer=" .. tostring(IsGuildOfficer()))
+
+    if RedDKP_SyncLocked then
+        Print("DEBUG: SyncLocked=true — sync is locked on user client")
+        Print("Sync is currently locked. Please wait a few seconds and try again.")
+        return
+    end
+    Print("DEBUG: SyncLocked=false")
+
+    if not IsInGuild() then
+        Print("DEBUG: IsInGuild=false — user not in guild")
         Print("Guild roster not ready — cannot request sync yet.")
         return
     end
 
+    local num = GetNumGuildMembers()
+    if num == 0 then
+        Print("DEBUG: GuildMembers=0 — roster not loaded yet")
+        Print("Guild roster not ready — cannot request sync yet.")
+        return
+    end
+    Print("DEBUG: GuildMembers=" .. tostring(num))
+
     local bestEditor = GetHighestRankEditor()
     if not bestEditor then
+        Print("DEBUG: bestEditor=nil — user sees NO online editors")
         Print("No editor online — cannot request sync.")
         return
     end
+    Print("DEBUG: bestEditor=" .. tostring(bestEditor))
 
-    C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "REQUEST:" .. me, "WHISPER", bestEditor)
+    -- If we reach here, the request SHOULD send
+    Print("DEBUG: Sending sync request to " .. bestEditor)
+	if channel == "WHISPER" and target then
+    Print("DEBUG: Final WHISPER target = '" .. tostring(target) ..
+          "' (len=" .. tostring(#target) .. ")")
+	end
+    RedDKP_Send(SYNC_PREFIX, "REQUEST:" .. me, "WHISPER", bestEditor)
     Print("Manual sync request sent to " .. bestEditor .. ".")
 end)
 
@@ -2617,21 +2626,18 @@ eventFrame:RegisterEvent("PLAYER_LOGIN")
 eventFrame:RegisterEvent("GUILD_ROSTER_UPDATE")
 eventFrame:RegisterEvent("PLAYER_GUILD_UPDATE")
 eventFrame:RegisterEvent("CHAT_MSG_ADDON")
+eventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
 
+---------------------------------------
+-- EVENT HANDLER
+---------------------------------------
 eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4, arg5)
 
     ---------------------------------------------------------
     -- 1. ADDON_LOADED
     ---------------------------------------------------------
     if event == "ADDON_LOADED" then
-        if arg1 ~= addonName then return end
-		
-		if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then
-		C_ChatInfo.RegisterAddonMessagePrefix(SYNC_PREFIX)
-		C_ChatInfo.RegisterAddonMessagePrefix(EDITOR_PREFIX)
-		C_ChatInfo.RegisterAddonMessagePrefix(EDITOR_REQ_PREFIX)
-		C_ChatInfo.RegisterAddonMessagePrefix(VERSION_PREFIX)
-	end
+		if arg1 ~= addonName then return end
 		
         EnsureSaved()
         EnsureMinimapConfig()
@@ -2667,15 +2673,17 @@ eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4, arg5)
     end
 
 
-    ---------------------------------------------------------
-    -- 2. PLAYER_LOGIN
-    ---------------------------------------------------------
+---------------------------------------------------------
+-- 2. PLAYER_LOGIN
+---------------------------------------------------------
 
 if event == "PLAYER_LOGIN" then
     CheckGuildRestriction()
     CreateUI()
     UpdateOnlineEditors()
     C_GuildInfo.GuildRoster()
+
+
 
     -- Small delay to let roster/chat settle, then do version + auto-sync
     C_Timer.After(3, function()
@@ -2684,14 +2692,6 @@ if event == "PLAYER_LOGIN" then
         -- Version ping to guild
         RedDKP_Send(VERSION_PREFIX, REDDKP_VERSION, "GUILD")
 
-        -- If this player is an editor, broadcast editor list
-        if IsEditor(UnitName("player")) then
-            BroadcastEditorList()
-        end
-		
-		-- Always request editor list on login (Classic/TBC safe)
-		RedDKP_Send(EDITOR_REQ_PREFIX, "REQ", "GUILD")
-
         -- Attempt auto-sync for non-editors
         AttemptAutoSync()
     end)
@@ -2699,47 +2699,48 @@ if event == "PLAYER_LOGIN" then
     return
 end
 
-    ---------------------------------------------------------
-    -- 3. GUILD_ROSTER_UPDATE / PLAYER_GUILD_UPDATE
-    ---------------------------------------------------------
-    if event == "GUILD_ROSTER_UPDATE" or event == "PLAYER_GUILD_UPDATE" then
-        CheckGuildRestriction()
-        UpdateOnlineEditors()
+---------------------------------------------------------
+-- 3. GUILD_ROSTER_UPDATE / PLAYER_GUILD_UPDATE
+---------------------------------------------------------
+if event == "GUILD_ROSTER_UPDATE" or event == "PLAYER_GUILD_UPDATE" then
+    CheckGuildRestriction()
+    UpdateOnlineEditors()
 
-        -- First time roster is actually ready
-        if not firstRosterReady then
-            if IsInGuild() and GetNumGuildMembers() > 0 then
-                local anyName = select(1, GetGuildRosterInfo(1))
-                if anyName then
-                    firstRosterReady = true
+    -- First time roster is actually ready
+    if not firstRosterReady then
+        if IsInGuild() and GetNumGuildMembers() > 0 then
+            local anyName = select(1, GetGuildRosterInfo(1))
+            if anyName then
+                firstRosterReady = true
+				EnsureProtectedEditor()
 
-                    -- Populate class data now that roster is real
-                    for i = 1, GetNumGuildMembers() do
-                        local gName, _, _, _, _, _, _, _, _, _, gClass = GetGuildRosterInfo(i)
-                        if gName and gClass then
-                            gName = Ambiguate(gName, "short")
-                            local d = RedDKP_Data[gName]
-                            if d then
-                                d.class = gClass
-                            end
+                -- Populate class data now that roster is real
+                for i = 1, GetNumGuildMembers() do
+                    local gName, _, _, _, _, _, _, _, _, _, gClass = GetGuildRosterInfo(i)
+                    if gName and gClass then
+                        gName = Ambiguate(gName, "short")
+                        local d = RedDKP_Data[gName]
+                        if d then
+                            d.class = gClass
                         end
                     end
+                end
 
-                    -- Now safely build the DKP table
-                    UpdateTable()
-					RedDKP_SyncLocked = false
-					SafeSetSyncWarning("")
-					
-					-- First time roster is truly ready: attempt auto-sync for non-editors
-					if not IsAuthorized() and not IsGuildOfficer() then
-						AttemptAutoSync()
-					end
+                -- Now safely build the DKP table
+                UpdateTable()
+                RedDKP_SyncLocked = false
+                SafeSetSyncWarning("")
+
+                -- First time roster is truly ready: attempt auto-sync for non-editors
+                if not IsAuthorized() and not IsGuildOfficer() then
+                    AttemptAutoSync()
                 end
             end
         end
-
-        return
     end
+
+    return
+end
 
 
     ---------------------------------------------------------
@@ -2792,8 +2793,7 @@ end
             end
 
             return
-        end
-
+        end       
 
         -----------------------------------------------------
         -- EDITOR_PREFIX / EDITOR_REQ_PREFIX (LibSerialize)
@@ -2805,7 +2805,26 @@ end
 		D("CHAT_MSG_ADDON prefix="..prefix.." sender="..sender.." msg="..msg)
         return
     end
+	
+	-----------------------------------------------------
+        -- PLAYER ENTERING WORLD
+        -----------------------------------------------------		
+		
+		if event == "PLAYER_ENTERING_WORLD" then
+			C_Timer.After(0, function()
+				local r1 = C_ChatInfo.RegisterAddonMessagePrefix(SYNC_PREFIX)
+				local r2 = C_ChatInfo.RegisterAddonMessagePrefix(EDITOR_PREFIX)
+				local r3 = C_ChatInfo.RegisterAddonMessagePrefix(EDITOR_SYNC_PREFIX)
+				local r4 = C_ChatInfo.RegisterAddonMessagePrefix(EDITOR_REQ_PREFIX)
+				local r5 = C_ChatInfo.RegisterAddonMessagePrefix(VERSION_PREFIX)
 
+				DEFAULT_CHAT_FRAME:AddMessage(
+					("|cff00ff00[RedDKP REGDBG]|r SYNC=%s EDITOR=%s EDITOR_SYNC=%s EDITOR_REQ=%s VER=%s")
+					:format(tostring(r1), tostring(r2), tostring(r3), tostring(r4), tostring(r5))
+				)
+			end)
+			return
+		end
 end)
 
 -- Slash Commands
