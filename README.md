@@ -4,7 +4,7 @@ Please report these under issues section (full BugSack data would be ideal)
 
 Showstoppers:
 
-1. SYNC fuctionality is still not working
+1. SYNC fuctionality is still not working - This has caused 2 days of bug fixing, testing and pain... in the end the whole thing was scrapped and redone and then scrapped and redon... it's now ready to test a shiney new version.   TL:DR - Blizzard API go fuck yourself.
 
 
 Missing functionality I want to add ASAP:
@@ -35,6 +35,7 @@ Known Bugs:
 7. It has lost formatting on the editors list due to fixing name sync issues (likely cosmetic)
 8. (Fixed) After fixing 5 the window can nolonger be moved on the DKP tab
 9. (Fixed) The group invites spams the user untill they accept the invite rather than once
+10. Currently only views the top 3 ranks of the guild as officer
 
 
 Features to consider for the distant future:
