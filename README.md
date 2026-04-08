@@ -4,7 +4,7 @@ Please report these under issues section (full BugSack data would be ideal)
 
 Showstoppers:
 
-1. SYNC fuctionality is still not working - This has caused 2 days of bug fixing, testing and pain... in the end the whole thing was scrapped and redone and then scrapped and redon... it's now ready to test a shiney new version.   TL:DR - Blizzard API go fuck yourself.
+1. SYNC fuctionality is still not working - but boy is it cloooooooooooooooooooose.  The data packet is now being received by the receiving machine but isnt being decoded so there'a a line of code missing and the whole thing fires into life.
 
 
 Missing functionality I want to add ASAP:
@@ -32,10 +32,11 @@ Known Bugs:
 4. (Fixed) Minimap button being a twat (needs a full rebuild and Lib file)
 5. (Fixed) Clicking away from edit value on DKP table doesnt deslect value (like pressing enter would)
 6. (Fixed) On first load the dkp table displays blank, it takes a /reload for the data to display
-7. It has lost formatting on the editors list due to fixing name sync issues (likely cosmetic)
+7. (fixed)It has lost formatting on the editors list due to fixing name sync issues (likely cosmetic)
 8. (Fixed) After fixing 5 the window can nolonger be moved on the DKP tab
 9. (Fixed) The group invites spams the user untill they accept the invite rather than once
 10. Currently only views the top 3 ranks of the guild as officer
+11. Personally it feels like there's a loop somewhere in the Editors code that makes it constantly check Editors, which is pointless... needs improved.
 
 
 Features to consider for the distant future:
