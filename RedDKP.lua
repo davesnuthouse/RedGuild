@@ -15,12 +15,7 @@ RedDKP_ForceSyncStatus = {
 local addonName      = ...
 local REDDKP_VERSION = "1.0.0"
 
-
-local SYNC_PREFIX = "REDDKP_SP"
-local EDITOR_PREFIX = "REDDKP_EP"
-local EDITOR_SYNC_PREFIX = "REDDKP_ESP"
-local EDITOR_REQ_PREFIX = "REDDKP_RP"
-local VERSION_PREFIX = "REDDKP_VP"
+local REDDKP_CHAT_PREFIX = "RDKP"
 
 RedDKP_Config.smartSync      = (RedDKP_Config.smartSync ~= false)
 RedDKP_Config.addonUsers     = RedDKP_Config.addonUsers     or {}
@@ -52,7 +47,8 @@ local protectedInitialized = false
 --------------------------------------------------
 -- DEBUGGING
 --------------------------------------------------
-RedDKP_Debug = true
+
+RedDKP_Debug = false
 local function D(msg)
     if RedDKP_Debug then
         print("|cff00ff00[RedDKP DEBUG]|r " .. msg)
@@ -89,24 +85,27 @@ function RedDKP_Invite(name)
     end
 end
 
-function RedDKP_Send(prefix, msg, channel, target)
-    local ok
+local function RedDKP_GetSyncChannelAndTarget(target)
+    if RedDKP_Debug_UseGuildChannel then
+        return "GUILD", nil
+    else
+        return "WHISPER", target
+    end
+end
 
-    if C_ChatInfo and C_ChatInfo.SendAddonMessage then
-        ok = C_ChatInfo.SendAddonMessage(prefix, msg, channel, target)
-    elseif SendAddonMessage then
-        ok = SendAddonMessage(prefix, msg, channel, target)
+function RedDKP_Send(msgType, payload, target)
+    if not target or target == "" then
+        DEFAULT_CHAT_FRAME:AddMessage("|cffff0000[RedDKP SENDDBG]|r missing target for msgType="..tostring(msgType))
+        return
     end
 
-    DEFAULT_CHAT_FRAME:AddMessage(
-        "|cffff0000[RedDKP SENDDBG]|r prefix="..tostring(prefix)..
-        " msg="..tostring(msg)..
-        " channel="..tostring(channel)..
-        " target="..tostring(target)..
-        " ok="..tostring(ok)
-    )
+    local msg = string.format("%s:%s:%s", REDDKP_CHAT_PREFIX, msgType, payload or "")
+    SendChatMessage(msg, "WHISPER", nil, target)
 
-    return ok
+    DEFAULT_CHAT_FRAME:AddMessage(
+        "|cffff0000[RedDKP SENDDBG]|r msg="..tostring(msg)..
+        " target="..tostring(target)
+    )
 end
 
 function RedDKP_RequestRoster()
@@ -169,7 +168,7 @@ end
 
 local function IsGuildOfficer()
     local _, _, rankIndex = GetGuildInfo("player")
-    return rankIndex == 0 or rankIndex == 1
+    return rankIndex == 0 or rankIndex == 1 or rankIndex == 2
 end
 
 local function GetGuildLeader()
@@ -868,26 +867,23 @@ local function UpdateAuditLog()
     end
 end
 
-local function BroadcastEditorList()
+local function BroadcastEditorListTo(target)
     EnsureConfig()
 
     local payload = {
         editors = RedDKP_Config.authorizedEditors,
-        version = RedDKP_Config.editorListVersion or 0,
+        version = (RedDKP_Config.editorListVersion or 0),
     }
-
-	payload.version = (payload.version or 0) + 1
-	RedDKP_Config.editorListVersion = payload.version
 
     local serialized = LibSerialize:Serialize(payload)
     local encoded    = LibDeflate:EncodeForWoWAddonChannel(serialized)
 
-    local message = "EDITORSYNC:" .. encoded
-    RedDKP_Send(EDITOR_PREFIX, message, "GUILD")
+    -- Send editor list to a single requester via WHISPER
+    RedDKP_Send("EDITORSYNC", encoded, target)
 end
 
 local function ApplyEditorList(payload)
-	D("Applying editor list, count="..tostring(#(function() local c=0 for _ in pairs(payload.editors) do c=c+1 end return c end)()))
+    D("Applying editor list, count="..tostring(#(function() local c=0 for _ in pairs(payload.editors or {}) do c=c+1 end return c end)()))
     EnsureConfig()
 
     if type(payload) ~= "table" or type(payload.editors) ~= "table" then
@@ -908,7 +904,7 @@ local function ApplyEditorList(payload)
     if RefreshEditorList then
         RefreshEditorList()
     end
-	D("Editor list applied. Authorized editors now: "..tostring(#(function() local c=0 for _ in pairs(RedDKP_Config.authorizedEditors) do c=c+1 end return c end)()))
+    D("Editor list applied. Authorized editors now: "..tostring(#(function() local c=0 for _ in pairs(RedDKP_Config.authorizedEditors) do c=c+1 end return c end)()))
 end
 
 local function OnEditorAddonMessage(prefix, message, channel, sender)
@@ -951,26 +947,26 @@ local function RefreshEditorList()
         return
     end
 
-    -- UI ONLY: determine who should be coloured as protected
-    local guildLeader = ShortName(GetGuildLeader())
-    local fallback = ShortName(UnitName("player"))
+    -- Determine protected editor (normalized key)
+    local protectedKey = RedDKP_Config.protectedEditor
 
+    -- Build a set of unique short names
     local nameSet = {}
-
-    for name in pairs(RedDKP_Config.authorizedEditors) do
-        local short = ShortName(name)
+    for key in pairs(RedDKP_Config.authorizedEditors) do
+        local short = ShortName(key)
         if short and short ~= "" then
             nameSet[short] = true
         end
     end
 
+    -- Convert to sorted list
     local names = {}
     for short in pairs(nameSet) do
         table.insert(names, short)
     end
-
     table.sort(names)
 
+    -- Populate UI rows
     for i = 1, #editorRows do
         local row = editorRows[i]
         local name = names[i]
@@ -978,12 +974,12 @@ local function RefreshEditorList()
         if name then
             row.name = name
 
-            local isProtected =
-                (guildLeader and name == guildLeader) or
-                (not guildLeader and name == fallback)
+            -- Normalized key for comparison
+            local key = NormalizeName(name)
 
-            if isProtected then
-                row.text:SetText("|cff00aaff" .. name .. "|r")
+            if key == protectedKey then
+                -- GOLD for protected editor
+                row.text:SetText("|cffffd700" .. name .. "|r")
                 row.isProtected = true
             else
                 row.text:SetText(name)
@@ -1517,8 +1513,7 @@ end
             RedDKP_Config.editorListVersion = (RedDKP_Config.editorListVersion or 0) + 1
             addBox:SetText("")
             RefreshEditorList()
-			C_ChatInfo.SendAddonMessage(EDITOR_SYNC_PREFIX, "REQUEST", "GUILD")
-            BroadcastEditorList()
+			BroadcastEditorListTo(UnitName("player"))  -- keep local in sync
         end)
 
         removeBtn:SetScript("OnClick", function()
@@ -1537,8 +1532,7 @@ end
             RedDKP_Config.editorListVersion = (RedDKP_Config.editorListVersion or 0) + 1
             editorsPanel.selectedEditor = nil
             RefreshEditorList()
-			C_ChatInfo.SendAddonMessage(EDITOR_SYNC_PREFIX, "REQUEST", "GUILD")
-            BroadcastEditorList()
+			BroadcastEditorListTo(UnitName("player"))  -- keep local in sync
         end)
 
         editorsPanel:SetScript("OnShow", function()
@@ -2109,70 +2103,55 @@ end
         requestBtn:SetSize(120, 24)
         requestBtn:SetText("Request SYNC")
         requestBtn:SetPoint("BOTTOMRIGHT", dkpPanel, "BOTTOMRIGHT", -10, 10)
-requestBtn:SetScript("OnClick", function()
+		requestBtn:SetScript("OnClick", function()
     EnsureSaved()
     EnsureOnlineEditors()
     UpdateOnlineEditors()
 
     local me = NormalizeName(UnitName("player"))
     if not me then
-        Print("DEBUG: me=nil — NormalizeName or UnitName failed")
         Print("Unable to determine your character name for sync.")
         return
     end
-    Print("DEBUG: me=" .. tostring(me))
 
-    if IsAuthorized() then
-        Print("DEBUG: IsAuthorized=true — user is flagged as editor")
-        Print("You are an editor/officer — you don't need to request sync.")
-        return
-    end
+	-- TURN THESE BACK ON AFTER SYNC IS FIXED
 
-    if IsGuildOfficer() then
-        Print("DEBUG: IsGuildOfficer=true — user is being detected as officer")
-        Print("You are an editor/officer — you don't need to request sync.")
-        return
-    end
+    --if IsAuthorized() then
+    --    Print("DEBUG: IsAuthorized=true — user is flagged as editor")
+    --    Print("You are an editor/officer — you don't need to request sync.")
+    --    return
+    --end
 
-    Print("DEBUG: IsAuthorized=" .. tostring(IsAuthorized()) ..
-          " IsGuildOfficer=" .. tostring(IsGuildOfficer()))
+    --if IsGuildOfficer() then
+    --    Print("DEBUG: IsGuildOfficer=true — user is being detected as officer")
+    --    Print("You are an editor/officer — you don't need to request sync.")
+    --    return
+    --end
 
     if RedDKP_SyncLocked then
-        Print("DEBUG: SyncLocked=true — sync is locked on user client")
         Print("Sync is currently locked. Please wait a few seconds and try again.")
         return
     end
-    Print("DEBUG: SyncLocked=false")
 
     if not IsInGuild() then
-        Print("DEBUG: IsInGuild=false — user not in guild")
         Print("Guild roster not ready — cannot request sync yet.")
         return
     end
 
     local num = GetNumGuildMembers()
     if num == 0 then
-        Print("DEBUG: GuildMembers=0 — roster not loaded yet")
         Print("Guild roster not ready — cannot request sync yet.")
         return
     end
-    Print("DEBUG: GuildMembers=" .. tostring(num))
 
     local bestEditor = GetHighestRankEditor()
     if not bestEditor then
-        Print("DEBUG: bestEditor=nil — user sees NO online editors")
         Print("No editor online — cannot request sync.")
         return
     end
-    Print("DEBUG: bestEditor=" .. tostring(bestEditor))
 
-    -- If we reach here, the request SHOULD send
-    Print("DEBUG: Sending sync request to " .. bestEditor)
-	if channel == "WHISPER" and target then
-    Print("DEBUG: Final WHISPER target = '" .. tostring(target) ..
-          "' (len=" .. tostring(#target) .. ")")
-	end
-    RedDKP_Send(SYNC_PREFIX, "REQUEST:" .. me, "WHISPER", bestEditor)
+    Print("Sending sync request to " .. bestEditor .. "...")
+    RedDKP_Send("REQUEST", me, bestEditor)
     Print("Manual sync request sent to " .. bestEditor .. ".")
 end)
 
@@ -2311,8 +2290,9 @@ local function HandleSyncRequest(requester, sender, isRequestSync)
 
     local payload = BuildSyncPayload()
     local encoded = EncodePayload(payload)
-	-- DebugSync(VERSION_PREFIX, "OUT", "GUILD", REDDKP_VERSION)
-    RedDKP_Send(SYNC_PREFIX, "DATA:" .. encoded, "WHISPER", requester)
+
+    -- Whisper sync data back to requester
+    RedDKP_Send("DATA", encoded, requester)
     Print("Sent sync data to " .. requester)
 end
 
@@ -2328,8 +2308,8 @@ local function HandleSyncResponse(sender, msgType)
         local payload = BuildSyncPayload()
         local encoded = EncodePayload(payload)
 
-        -- Always use compatibility-safe send
-        RedDKP_Send(SYNC_PREFIX, "DATA:" .. encoded, "WHISPER", sender)
+        -- Whisper sync data directly to the accepter
+        RedDKP_Send("DATA", encoded, sender)
 
         Print(sender .. " accepted force sync.")
         return
@@ -2347,26 +2327,25 @@ local function HandleSyncResponse(sender, msgType)
 end
 
 local function AttemptAutoSync()
-	D("AttemptAutoSync called")
-	
+    D("AttemptAutoSync called")
+
     EnsureSaved()
     EnsureAddonUsers()
-	UpdateOnlineEditors()
+    UpdateOnlineEditors()
     EnsureOnlineEditors()
 
-	if not next(RedDKP_Config.authorizedEditors) then
-		SafeSetSyncWarning("Waiting for editor list...")
-		return
-	end
+    if not next(RedDKP_Config.authorizedEditors) then
+        SafeSetSyncWarning("Waiting for editor list...")
+        return
+    end
 
-    -- Normalized local player name
     local me = UnitName("player")
     if not me then
         SafeSetSyncWarning("Player name unavailable — sync aborted.")
         return
     end
 
-	D("AuthorizedEditors count=" .. CountKeys(RedDKP_Config.authorizedEditors))
+    D("AuthorizedEditors count=" .. CountKeys(RedDKP_Config.authorizedEditors))
 
     -- Editors / officers / GM never auto‑sync
     if IsAuthorized() or IsGuildOfficer() then
@@ -2383,8 +2362,9 @@ local function AttemptAutoSync()
         return
     end
 
-	local oc=0 for _ in pairs(RedDKP_Config.onlineEditors) do oc=oc+1 end
-	D("OnlineEditors count="..oc)
+    local oc = 0
+    for _ in pairs(RedDKP_Config.onlineEditors) do oc = oc + 1 end
+    D("OnlineEditors count="..oc)
 
     UpdateOnlineEditors()
     local bestEditor = GetHighestRankEditor()
@@ -2394,24 +2374,21 @@ local function AttemptAutoSync()
         return
     end
 
-    -- Normalize the chosen editor
     local bestNorm = NormalizeName(bestEditor)
     if not bestNorm then
         SafeSetSyncWarning("Invalid editor name — sync aborted.")
         return
     end
 
-    -- Do not sync from yourself
-    if bestNorm == me then
+    if bestNorm == NormalizeName(me) then
         SafeSetSyncWarning("Editor detected as self — sync aborted.")
         return
     end
-	
-	D("Sending sync request to "..bestEditor)
 
-    -- Request sync from the highest‑rank online editor
-	-- DebugSync(VERSION_PREFIX, "OUT", "GUILD", REDDKP_VERSION)
-    RedDKP_Send(SYNC_PREFIX, "REQUEST:" .. me, "WHISPER", bestEditor)
+    D("Sending sync request to "..bestEditor)
+
+    -- Request sync from the highest‑rank online editor via WHISPER
+    RedDKP_Send("REQUEST", NormalizeName(me), bestEditor)
     Print("Requesting automatic sync from " .. bestEditor .. "...")
 end
 
@@ -2431,11 +2408,11 @@ StaticPopupDialogs["REDDKP_FORCE_SYNC_CONFIRM"] = {
         RedDKP_ForceSyncStatus.declined = 0
 
         for name in pairs(RedDKP_Config.addonUsers) do
-            if name ~= me and UnitIsConnected(name) and UnitInGuild(name) then
-                RedDKP_ForceSyncStatus.total = RedDKP_ForceSyncStatus.total + 1
-                RedDKP_Send(SYNC_PREFIX, "FORCE_REQ:" .. me, "WHISPER", name)
-            end
-        end
+    if name ~= me and UnitIsConnected(name) and UnitInGuild(name) then
+        RedDKP_ForceSyncStatus.total = RedDKP_ForceSyncStatus.total + 1
+        RedDKP_Send("FORCE_REQ", me, name)
+    end
+end
 
         Print("Force sync request sent to " .. RedDKP_ForceSyncStatus.total .. " users.")
     end,
@@ -2449,10 +2426,10 @@ StaticPopupDialogs["REDDKP_FORCE_SYNC_RECEIVE"] = {
     button1 = "Accept",
     button2 = "Decline",
     OnAccept = function(self, editor)
-        C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "FORCE_ACCEPT:" .. UnitName("player"), "WHISPER", editor)
+        RedDKP_Send("FORCE_ACCEPT", UnitName("player"), editor)
     end,
     OnCancel = function(self, editor)
-        C_ChatInfo.SendAddonMessage(SYNC_PREFIX, "FORCE_DECLINE:" .. UnitName("player"), "WHISPER", editor)
+        RedDKP_Send("FORCE_DECLINE", UnitName("player"), editor)
         SafeSetSyncWarning("WARNING — You declined sync. Your data may be outdated.")
     end,
     timeout = 0,
@@ -2625,20 +2602,15 @@ eventFrame:RegisterEvent("ADDON_LOADED")
 eventFrame:RegisterEvent("PLAYER_LOGIN")
 eventFrame:RegisterEvent("GUILD_ROSTER_UPDATE")
 eventFrame:RegisterEvent("PLAYER_GUILD_UPDATE")
-eventFrame:RegisterEvent("CHAT_MSG_ADDON")
-eventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
+eventFrame:RegisterEvent("CHAT_MSG_WHISPER")
 
----------------------------------------
--- EVENT HANDLER
----------------------------------------
 eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4, arg5)
-
     ---------------------------------------------------------
     -- 1. ADDON_LOADED
     ---------------------------------------------------------
     if event == "ADDON_LOADED" then
-		if arg1 ~= addonName then return end
-		
+        if arg1 ~= addonName then return end
+
         EnsureSaved()
         EnsureMinimapConfig()
 
@@ -2672,159 +2644,135 @@ eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4, arg5)
         return
     end
 
+    ---------------------------------------------------------
+    -- 2. PLAYER_LOGIN
+    ---------------------------------------------------------
+    if event == "PLAYER_LOGIN" then
+        CheckGuildRestriction()
+        CreateUI()
+        UpdateOnlineEditors()
+        C_GuildInfo.GuildRoster()
 
----------------------------------------------------------
--- 2. PLAYER_LOGIN
----------------------------------------------------------
+        -- Small delay to let roster/chat settle, then auto-sync
+        C_Timer.After(3, function()
+            if not IsInGuild() then return end
+            AttemptAutoSync()
+        end)
 
-if event == "PLAYER_LOGIN" then
-    CheckGuildRestriction()
-    CreateUI()
-    UpdateOnlineEditors()
-    C_GuildInfo.GuildRoster()
+        return
+    end
 
+    ---------------------------------------------------------
+    -- 3. GUILD_ROSTER_UPDATE / PLAYER_GUILD_UPDATE
+    ---------------------------------------------------------
+    if event == "GUILD_ROSTER_UPDATE" or event == "PLAYER_GUILD_UPDATE" then
+        CheckGuildRestriction()
+        UpdateOnlineEditors()
 
+        if not firstRosterReady then
+            if IsInGuild() and GetNumGuildMembers() > 0 then
+                local anyName = select(1, GetGuildRosterInfo(1))
+                if anyName then
+                    firstRosterReady = true
+                    EnsureProtectedEditor()
 
-    -- Small delay to let roster/chat settle, then do version + auto-sync
-    C_Timer.After(3, function()
-        if not IsInGuild() then return end
-
-        -- Version ping to guild
-        RedDKP_Send(VERSION_PREFIX, REDDKP_VERSION, "GUILD")
-
-        -- Attempt auto-sync for non-editors
-        AttemptAutoSync()
-    end)
-
-    return
-end
-
----------------------------------------------------------
--- 3. GUILD_ROSTER_UPDATE / PLAYER_GUILD_UPDATE
----------------------------------------------------------
-if event == "GUILD_ROSTER_UPDATE" or event == "PLAYER_GUILD_UPDATE" then
-    CheckGuildRestriction()
-    UpdateOnlineEditors()
-
-    -- First time roster is actually ready
-    if not firstRosterReady then
-        if IsInGuild() and GetNumGuildMembers() > 0 then
-            local anyName = select(1, GetGuildRosterInfo(1))
-            if anyName then
-                firstRosterReady = true
-				EnsureProtectedEditor()
-
-                -- Populate class data now that roster is real
-                for i = 1, GetNumGuildMembers() do
-                    local gName, _, _, _, _, _, _, _, _, _, gClass = GetGuildRosterInfo(i)
-                    if gName and gClass then
-                        gName = Ambiguate(gName, "short")
-                        local d = RedDKP_Data[gName]
-                        if d then
-                            d.class = gClass
+                    for i = 1, GetNumGuildMembers() do
+                        local gName, _, _, _, _, _, _, _, _, _, gClass = GetGuildRosterInfo(i)
+                        if gName and gClass then
+                            gName = Ambiguate(gName, "short")
+                            local d = RedDKP_Data[gName]
+                            if d then
+                                d.class = gClass
+                            end
                         end
                     end
-                end
 
-                -- Now safely build the DKP table
-                UpdateTable()
-                RedDKP_SyncLocked = false
-                SafeSetSyncWarning("")
-
-                -- First time roster is truly ready: attempt auto-sync for non-editors
-                if not IsAuthorized() and not IsGuildOfficer() then
-                    AttemptAutoSync()
+                    UpdateTable()
+                    RedDKP_SyncLocked = false
+                    SafeSetSyncWarning("")
                 end
             end
         end
+
+        return
     end
 
-    return
-end
-
-
     ---------------------------------------------------------
-    -- 4. REMOVED DURING ATTEMPT TO FIX SYNC (WAS CHAT_MSG_CHANNEL_NOTICE)
+    -- 4. CHAT_MSG_WHISPER (all RedDKP sync traffic)
     ---------------------------------------------------------
-
-
-
-    ---------------------------------------------------------
-    -- 5. CHAT_MSG_ADDON  (sync, force sync, editor sync)
-    ---------------------------------------------------------
-    if event == "CHAT_MSG_ADDON" then
-        local prefix, msg, channel, sender = arg1, arg2, arg3, arg4
-        if not msg or not sender then return end
+    if event == "CHAT_MSG_WHISPER" then
+        local text, sender = arg1, arg2
+        if not text or not sender then return end
 
         sender = Ambiguate(sender, "short")
 
-		--DebugSync(prefix, "IN", sender, msg)
-
-        -----------------------------------------------------
-        -- SYNC_PREFIX (REQUEST, FORCE_REQ, DATA, etc.)
-        -----------------------------------------------------
-        if prefix == SYNC_PREFIX then
-            local cmd, data = msg:match("^(%w+):(.*)$")
-            if not cmd then return end
-
-            if cmd == "REQUEST" then
-                HandleSyncRequest(data, sender, false)
-                return
-            end
-
-            if cmd == "FORCE_REQ" then
-                StaticPopup_Show("REDDKP_FORCE_SYNC_RECEIVE", sender, nil, sender)
-                return
-            end
-
-            if cmd == "FORCE_ACCEPT" then
-                HandleSyncResponse(sender, "FORCE_ACCEPT")
-                return
-            end
-
-            if cmd == "FORCE_DECLINE" then
-                HandleSyncResponse(sender, "FORCE_DECLINE")
-                return
-            end
-
-            if cmd == "DATA" then
-                ApplySyncData(sender, data)
-                return
-            end
-
-            return
-        end       
-
-        -----------------------------------------------------
-        -- EDITOR_PREFIX / EDITOR_REQ_PREFIX (LibSerialize)
-        -----------------------------------------------------
-        if prefix == EDITOR_PREFIX or prefix == EDITOR_REQ_PREFIX then
-            OnEditorAddonMessage(prefix, msg, channel, sender)
+        local prefix, msgType, payload = text:match("^([^:]+):([^:]+):(.*)$")
+        if prefix ~= REDDKP_CHAT_PREFIX then
             return
         end
-		D("CHAT_MSG_ADDON prefix="..prefix.." sender="..sender.." msg="..msg)
+
+        D("WHISPER IN type="..tostring(msgType).." from="..tostring(sender))
+
+        -----------------------------------------------------
+        -- SYNC (REQUEST, FORCE_REQ, DATA, etc.)
+        -----------------------------------------------------
+        if msgType == "REQUEST" then
+            HandleSyncRequest(payload, sender, false)
+            return
+        end
+
+        if msgType == "FORCE_REQ" then
+            StaticPopup_Show("REDDKP_FORCE_SYNC_RECEIVE", sender, nil, sender)
+            return
+        end
+
+        if msgType == "FORCE_ACCEPT" then
+            HandleSyncResponse(sender, "FORCE_ACCEPT")
+            return
+        end
+
+        if msgType == "FORCE_DECLINE" then
+            HandleSyncResponse(sender, "FORCE_DECLINE")
+            return
+        end
+
+        if msgType == "DATA" then
+            ApplySyncData(sender, payload)
+            return
+        end
+
+        -----------------------------------------------------
+        -- EDITOR LIST SYNC
+        -----------------------------------------------------
+        if msgType == "EDITORSYNC" then
+            local decoded = LibDeflate:DecodeForWoWAddonChannel(payload)
+            if not decoded then return end
+
+            local ok, tbl = LibSerialize:Deserialize(decoded)
+            if not ok or type(tbl) ~= "table" then return end
+
+            ApplyEditorList(tbl)
+            UpdateOnlineEditors()
+            return
+        end
+
+        if msgType == "EDITORREQ" then
+            if IsAuthorized() or IsGuildOfficer() then
+                BroadcastEditorListTo(sender)
+            end
+            return
+        end
+
+        -----------------------------------------------------
+        -- VERSION (optional, currently ignored)
+        -----------------------------------------------------
+        if msgType == "VERSION" then
+            -- You can add version handling here if you want
+            return
+        end
+
         return
     end
-	
-	-----------------------------------------------------
-        -- PLAYER ENTERING WORLD
-        -----------------------------------------------------		
-		
-		if event == "PLAYER_ENTERING_WORLD" then
-			C_Timer.After(0, function()
-				local r1 = C_ChatInfo.RegisterAddonMessagePrefix(SYNC_PREFIX)
-				local r2 = C_ChatInfo.RegisterAddonMessagePrefix(EDITOR_PREFIX)
-				local r3 = C_ChatInfo.RegisterAddonMessagePrefix(EDITOR_SYNC_PREFIX)
-				local r4 = C_ChatInfo.RegisterAddonMessagePrefix(EDITOR_REQ_PREFIX)
-				local r5 = C_ChatInfo.RegisterAddonMessagePrefix(VERSION_PREFIX)
-
-				DEFAULT_CHAT_FRAME:AddMessage(
-					("|cff00ff00[RedDKP REGDBG]|r SYNC=%s EDITOR=%s EDITOR_SYNC=%s EDITOR_REQ=%s VER=%s")
-					:format(tostring(r1), tostring(r2), tostring(r3), tostring(r4), tostring(r5))
-				)
-			end)
-			return
-		end
 end)
 
 -- Slash Commands
@@ -2869,4 +2817,72 @@ SlashCmdList["REDDKP"] = function(msg)
     end
 
     print("|cffff5555Unknown command. Use /reddkp help|r")
+end
+
+SLASH_REDDKP_LIBTEST1 = "/rdkplibtest"
+SlashCmdList["REDDKP_LIBTEST"] = function()
+    print("|cff00ff00[RedDKP] Running LibSerialize/LibDeflate test...|r")
+
+    local ok = true
+
+    -- 1. Check library existence
+    if not LibSerialize then
+        print("|cffff0000LibSerialize NOT FOUND|r")
+        ok = false
+    end
+    if not LibDeflate then
+        print("|cffff0000LibDeflate NOT FOUND|r")
+        ok = false
+    end
+    if not ok then return end
+
+    -- 2. Test serialization
+    local testTable = { a = 1, b = "hello", c = { 10, 20, 30 } }
+    local serialized = LibSerialize:Serialize(testTable)
+    if not serialized or serialized == "" then
+        print("|cffff0000Serialization FAILED|r")
+        return
+    end
+    print("Serialized OK:", serialized:sub(1, 50) .. "...")
+
+    -- 3. Test compression
+    local compressed = LibDeflate:CompressDeflate(serialized)
+    if not compressed or compressed == "" then
+        print("|cffff0000Compression FAILED|r")
+        return
+    end
+    print("Compressed OK (len=" .. #compressed .. ")")
+
+    -- 4. Test encoding
+    local encoded = LibDeflate:EncodeForWoWAddonChannel(compressed)
+    if not encoded or encoded == "" then
+        print("|cffff0000Encoding FAILED|r")
+        return
+    end
+    print("Encoded OK (len=" .. #encoded .. ")")
+
+    -- 5. Test decoding
+    local decoded = LibDeflate:DecodeForWoWAddonChannel(encoded)
+    if not decoded then
+        print("|cffff0000Decoding FAILED|r")
+        return
+    end
+    print("Decoded OK")
+
+    -- 6. Test decompression
+    local decompressed = LibDeflate:DecompressDeflate(decoded)
+    if not decompressed then
+        print("|cffff0000Decompression FAILED|r")
+        return
+    end
+    print("Decompressed OK")
+
+    -- 7. Test deserialization
+    local success, final = LibSerialize:Deserialize(decompressed)
+    if not success then
+        print("|cffff0000Deserialization FAILED|r")
+        return
+    end
+
+    print("|cff00ff00LibSerialize + LibDeflate FULL TEST PASSED|r")
 end
