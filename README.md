@@ -28,6 +28,7 @@ Missing functionality I want to add/chage ASAP:
 15. Remove request sync button from editor
 16. Retains the tickboxes on group builder (to prevent loss on a DC), due to this will also have to add a clear (and heck whynot a tick all) option.
 17. (Done) Remove funcitonality to check officers... it's not really needed as the addon uses it's own editors lists to determine who shouldnt sync and where data comes from.
+18. There's no username validation on editor list, would be best to only allow guild users
 
 
 Known Bugs:
