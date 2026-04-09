@@ -24,6 +24,8 @@ RedGuild_Config.authorizedEditors = RedGuild_Config.authorizedEditors or {}
 
 RedGuild_Usage = RedGuild_Usage or {}
 RedGuild_SyncLocked = true
+RedGuild_LastSyncTime = RedGuild_LastSyncTime or "Never"
+RedGuild_UIReady = false
 
 local mainFrame
 local dkpPanel, raidPanel, editorsPanel, auditPanel
@@ -339,6 +341,13 @@ end
 local function IsAuthorized()
     EnsureSaved()
 
+D(string.format(
+    "AUTH CHECK → player='%s' norm='%s' authorized=%s",
+    tostring(UnitName("player")),
+    tostring(NormalizeName(UnitName("player"))),
+    tostring(RedGuild_Config.authorizedEditors[NormalizeName(UnitName("player"))])
+))
+
     local player = NormalizeName(UnitName("player"))
     if not player then return false end
 
@@ -571,6 +580,14 @@ local function UpdateOnlineEditors()
 
         if name then
             local realName = Ambiguate(name, "short")
+			
+			D(string.format("ONLINE EDITOR SCAN → %s (norm=%s) online=%s editor=%s",
+    tostring(realName),
+    tostring(short),
+    tostring(online),
+    tostring(RedGuild_Config.authorizedEditors[short])
+))
+			
             local short = NormalizeName(realName)
 
             if RedGuild_Config.authorizedEditors[short] then
@@ -682,6 +699,9 @@ function LayoutPanel(panel)
 end
 
 function ShowTab(id)
+    if not RedGuild_UIReady then
+        return
+    end
     activeTab = id
 
     for i, tab in ipairs(tabs) do
@@ -1023,6 +1043,8 @@ local function BroadcastEditorListTo(target)
     local compressed  = LibDeflate:CompressDeflate(serialized)
     local encoded     = LibDeflate:EncodeForPrint(compressed)  -- TEXT SAFE
 
+	D("EDITOR SYNC → Sending to " .. tostring(target))
+
     RedGuild_Send("EDITORSYNC", encoded, target)
 end
 
@@ -1035,6 +1057,12 @@ local function ApplyEditorList(payload)
     end
 
     local newList = payload.editors
+	
+	D("EDITOR SYNC → Applying editor list with keys:")
+for k in pairs(newList) do
+    D("   key=" .. tostring(k))
+end
+	
     local oldList = RedGuild_Config.authorizedEditors or {}
 
     -- Debug incoming data
@@ -1225,11 +1253,12 @@ local function CreateUI()
 			inlineEdit:Hide()
 		end
 	end)
+	
     groupPanel   = CreateFrame("Frame", nil, mainFrame); LayoutPanel(groupPanel)
     raidPanel    = CreateFrame("Frame", nil, mainFrame); LayoutPanel(raidPanel)
     editorsPanel = CreateFrame("Frame", nil, mainFrame); LayoutPanel(editorsPanel)
     auditPanel   = CreateFrame("Frame", nil, mainFrame); LayoutPanel(auditPanel)
-
+	
 --------------------------------------------------------------------
 -- GROUP BUILDER PANEL
 --------------------------------------------------------------------
@@ -1762,6 +1791,19 @@ end
 
         auditPanel:SetScript("OnShow", UpdateAuditLog)
     end
+
+------------------------------------------------------------
+-- DKP FOOTER INFO LINE (small + grey)
+------------------------------------------------------------
+local dkpFooter = dkpPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+dkpFooter:SetPoint("BOTTOM", dkpPanel, "BOTTOM", 0, 10)
+
+-- Make it half-size and grey
+dkpFooter:SetFont(dkpFooter:GetFont(), 8)   -- default is 12, so 8 is ~half
+dkpFooter:SetTextColor(0.7, 0.7, 0.7, 1)    -- light grey
+
+dkpFooter:SetText("RedGuild v" .. REDGUILD_VERSION)
+RedGuild_DKPFooter = dkpFooter
 
 --------------------------------------------------------------------
 -- DKP TABLE
@@ -2360,6 +2402,16 @@ else
     D("CreateUI: guild roster not ready, deferring first UpdateTable")
 end
 
+if RedGuild_DKPFooter then
+    local count = 0
+    for _ in pairs(RedGuild_Config.onlineEditors or {}) do count = count + 1 end
+    RedGuild_DKPFooter:SetText(
+        string.format("RedGuild v%s  |  Editors Online: %d  |  Last Sync: %s",
+            REDGUILD_VERSION, count, RedGuild_LastSyncTime or "Never")
+    )
+end
+
+RedGuild_UIReady = true
 ShowTab(TAB_DKP)
 end
 
@@ -2438,8 +2490,17 @@ local function ApplySyncData(sender, encoded)
     SafeSetSyncWarning("")
     UpdateTable()
     LogAudit(sender, "SYNC_APPLIED", "old data", "New DKP + audit data applied")
-    Print("Sync completed from " .. sender)
+    RedGuild_LastSyncTime = date("%Y-%m-%d %H:%M:%S")
+if RedGuild_DKPFooter then
+    local count = 0
+    for _ in pairs(RedGuild_Config.onlineEditors or {}) do count = count + 1 end
+    RedGuild_DKPFooter:SetText(
+        string.format("RedGuild v%s  |  Editors Online: %d  |  Last Sync: %s",
+            REDGUILD_VERSION, count, RedGuild_LastSyncTime)
+    )
+end
 	D("Sync applied successfully")
+	
 end
 
 local function CheckForceSyncCompletion()
@@ -2483,9 +2544,9 @@ local function HandleSyncRequest(requester, sender, isRequestSync)
     local encoded = EncodePayload(payload)
 
 	-- DEBUG: log the exact name we are about to whisper to
-	print("|cffff00ff[DEBUG] DATA reply target =|r", requesterReal, " (type:", type(requesterReal), ")")
+	D(string.format("[DATA DEBUG] reply target=%s type=%s", tostring(requesterReal), tostring(type(requesterReal))))
 
-    D("Sending DATA to "..tostring(requesterReal))
+    D("SYNC REQUEST → Sending DATA to " .. tostring(requesterReal))
     -- Whisper sync data back to requester using REAL name
     RedGuild_Send("DATA", encoded, requesterReal)
     Print("Sent sync data to " .. requesterReal)
@@ -2585,7 +2646,14 @@ local function AttemptAutoSync()
     -- Request sync from the highest‑rank online editor via WHISPER
     local meReal = Ambiguate(me, "short")
 	RedGuild_Send("REQUEST", meReal, bestEditor)
-    Print("Requesting automatic sync from " .. bestEditor .. "...")
+    if RedGuild_DKPFooter then
+    local count = 0
+    for _ in pairs(RedGuild_Config.onlineEditors or {}) do count = count + 1 end
+    RedGuild_DKPFooter:SetText(
+        string.format("RedGuild v%s  |  Editors Online: %d  |  Last Sync: %s",
+            REDGUILD_VERSION, count, RedGuild_LastSyncTime or "Never")
+    )
+	end
 end
 
 -- Popups
@@ -2761,6 +2829,10 @@ local LDB = LibStub("LibDataBroker-1.1"):NewDataObject("RedGuild", {
     icon = "Interface\\AddOns\\RedGuild\\media\\RedGuild_Minimap64.png",
 
     OnClick = function(_, button)
+		if not RedGuild_UIReady then
+			return
+		end
+		
         if not RedGuild_Enabled then
             print("|cffff5555RedGuild is disabled for your character as you are not in Redemption guild.|r")
             return
@@ -2863,6 +2935,9 @@ eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4, arg5)
     -- 2. PLAYER_LOGIN
     ---------------------------------------------------------
     if event == "PLAYER_LOGIN" then
+	
+		local me = NormalizeName(UnitName("player"))
+		RedGuild_Config.addonUsers[me] = true
 
         CheckGuildRestriction()
         CreateUI()
@@ -2969,7 +3044,7 @@ if event == "CHAT_MSG_WHISPER" then
             end
 
             if complete then
-                print(string.format("|cffff00ff[DEBUG] All %s parts received, assembling...|r", msgType))
+                D(string.format("CHUNK ASSEMBLY COMPLETE → %s", msgType))
 
                 local full = table.concat(entry.parts, "")
                 bucket[seq] = nil -- clear buffer
