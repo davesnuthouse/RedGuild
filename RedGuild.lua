@@ -596,7 +596,7 @@ local function UpdateOnlineEditors()
         local me = NormalizeName(UnitName("player"))
 
         for short, info in pairs(RedGuild_Config.onlineEditors) do
-            if short ~= me then
+            if short ~= me and RedGuild_Config.addonUsers[short] then
                 -- Ask each online editor for their editor list
                 -- They will respond with EDITORSYNC if they have a newer version
                 D("Requesting editor list from " .. tostring(info.name))
@@ -1009,10 +1009,15 @@ end
 local function BroadcastEditorListTo(target)
     EnsureConfig()
 
+	D("EDITOR SYNC → Sending editor list to " .. tostring(target))
+
     local payload = {
         editors = RedGuild_Config.authorizedEditors,
         version = (RedGuild_Config.editorListVersion or 0),
     }
+
+    D("EDITOR SYNC → Payload version=" .. tostring(payload.version)
+        .. " editors=" .. tostring(CountKeys(payload.editors)))
 
     local serialized  = LibSerialize:Serialize(payload)
     local compressed  = LibDeflate:CompressDeflate(serialized)
@@ -1022,12 +1027,19 @@ local function BroadcastEditorListTo(target)
 end
 
 local function ApplyEditorList(payload)
+    D("EDITOR SYNC → ApplyEditorList called")
+
     if type(payload) ~= "table" or type(payload.editors) ~= "table" then
+        D("EDITOR SYNC ERROR: payload invalid")
         return
     end
 
     local newList = payload.editors
     local oldList = RedGuild_Config.authorizedEditors or {}
+
+    -- Debug incoming data
+    D("EDITOR SYNC → Incoming version=" .. tostring(payload.version))
+    D("EDITOR SYNC → Incoming editors=" .. tostring(CountKeys(newList)))
 
     -- Detect if anything changed
     local changed = not TablesEqual(oldList, newList)
@@ -1035,17 +1047,15 @@ local function ApplyEditorList(payload)
     -- Apply new list
     RedGuild_Config.authorizedEditors = newList
 
-    -- Debug
-    local count = 0
-    for _ in pairs(newList) do count = count + 1 end
-    D("Editor list applied. Authorized editors now: " .. count)
+    -- Debug after applying
+    D("EDITOR SYNC → Applied editor list. New count=" .. tostring(CountKeys(newList)))
 
     -- Only update UI if something actually changed
     if changed then
-        D("Editor list changed — updating online editors")
+        D("EDITOR SYNC → Editor list changed — updating online editors")
         UpdateOnlineEditors()
     else
-        D("Editor list unchanged — skipping UpdateOnlineEditors")
+        D("EDITOR SYNC → Editor list unchanged — skipping UpdateOnlineEditors")
     end
 end
 
@@ -1088,23 +1098,32 @@ local function OnEditorAddonMessage(prefix, message, channel, sender)
 end
 
 local function RefreshEditorList()
+    D("EDITOR SYNC → RefreshEditorList() called")
     EnsureSaved()
 
     if not editorRows or not editorRows[1] then
+        D("EDITOR SYNC → No editorRows available, aborting")
         return
     end
 
     -- Determine protected editor (normalized key)
     local protectedKey = RedGuild_Config.protectedEditor
+    D("EDITOR SYNC → Protected editor key = " .. tostring(protectedKey))
 
     -- Build a set of unique short names
     local nameSet = {}
+    local totalEditors = 0
+
     for key in pairs(RedGuild_Config.authorizedEditors) do
+        totalEditors = totalEditors + 1
         local short = ShortName(key)
         if short and short ~= "" then
             nameSet[short] = true
         end
     end
+
+    D("EDITOR SYNC → AuthorizedEditors count = " .. tostring(totalEditors))
+    D("EDITOR SYNC → Unique short names = " .. tostring(CountKeys(nameSet)))
 
     -- Convert to sorted list of objects
     local names = {}
@@ -1115,6 +1134,11 @@ local function RefreshEditorList()
     table.sort(names, function(a, b)
         return a.name < b.name
     end)
+
+    D("EDITOR SYNC → Sorted editor list:")
+    for i, entry in ipairs(names) do
+        D("   [" .. i .. "] " .. tostring(entry.name))
+    end
 
     -- Populate UI rows
     for i = 1, #editorRows do
@@ -1131,9 +1155,11 @@ local function RefreshEditorList()
             if key == protectedKey then
                 row.text:SetText("|cffffd700" .. name .. "|r")
                 row.isProtected = true
+                D("EDITOR SYNC → Row " .. i .. " = PROTECTED " .. name)
             else
                 row.text:SetText(name)
                 row.isProtected = false
+                D("EDITOR SYNC → Row " .. i .. " = " .. name)
             end
 
             row:Show()
@@ -1142,6 +1168,7 @@ local function RefreshEditorList()
             row.text:SetText("")
             row.isProtected = false
             row:Hide()
+            D("EDITOR SYNC → Row " .. i .. " hidden (no entry)")
         end
     end
 end
@@ -1677,17 +1704,21 @@ end
 
         editorsPanel:SetScript("OnShow", function()
             C_Timer.After(0.05, RefreshEditorList)
-            if not IsGuildOfficer() then
-                addBox:Hide()
-                addBtn:Hide()
-                removeBtn:Hide()
-                removeNote:Hide()
-            else
-                addBox:Show()
-                addBtn:Show()
-                removeBtn:Show()
-                removeNote:Show()
-            end
+            
+			local canEditEditors = IsGuildOfficer() or IsEditor(UnitName("player"))
+
+    if not canEditEditors then
+        addBox:Hide()
+        addBtn:Hide()
+        removeBtn:Hide()
+        removeNote:Hide()
+    else
+        addBox:Show()
+        addBtn:Show()
+        removeBtn:Show()
+        removeNote:Show()
+    end	
+			
         end)
 
         local note = editorsPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
@@ -2946,18 +2977,32 @@ if event == "CHAT_MSG_WHISPER" then
                 if msgType == "DATA" then
                     ApplySyncData(entry.from or sender, full)
 
-                elseif msgType == "EDITORSYNC" then
-                    local decoded = LibDeflate:DecodeForPrint(full)
-                    if not decoded then return end
+elseif msgType == "EDITORSYNC" then
+    D("EDITOR SYNC ← All parts received for EDITORSYNC from " .. tostring(entry.from))
 
-                    local decompressed = LibDeflate:DecompressDeflate(decoded)
-                    if not decompressed then return end
+    local decoded = LibDeflate:DecodeForPrint(full)
+    if not decoded then
+        D("EDITOR SYNC ERROR: DecodeForPrint failed")
+        return
+    end
 
-                    local ok, tbl = LibSerialize:Deserialize(decompressed)
-                    if not ok or type(tbl) ~= "table" then return end
+    local decompressed = LibDeflate:DecompressDeflate(decoded)
+    if not decompressed then
+        D("EDITOR SYNC ERROR: DecompressDeflate failed")
+        return
+    end
 
-                    ApplyEditorList(tbl)
-                end
+    local ok, tbl = LibSerialize:Deserialize(decompressed)
+    if not ok or type(tbl) ~= "table" then
+        D("EDITOR SYNC ERROR: Deserialize failed or returned non-table")
+        return
+    end
+
+    D("EDITOR SYNC ← Decoded table: version=" .. tostring(tbl.version)
+        .. " editors=" .. tostring(tbl.editors and CountKeys(tbl.editors) or 0))
+
+    ApplyEditorList(tbl)
+end
             end
 
             return
