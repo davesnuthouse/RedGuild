@@ -29,6 +29,7 @@ Missing functionality I want to add/chage ASAP:
 16. Retains the tickboxes on group builder (to prevent loss on a DC), due to this will also have to add a clear (and heck whynot a tick all) option.
 17. (Done) Remove funcitonality to check officers... it's not really needed as the addon uses it's own editors lists to determine who shouldnt sync and where data comes from.
 18. There's no username validation on editor list, would be best to only allow guild users
+19. Improve EE use.
 
 
 Known Bugs:
@@ -43,6 +44,7 @@ Known Bugs:
 9. (Fixed) The group invites spams the user untill they accept the invite rather than once 
 10. (Fixed) Personally it feels like there's a loop somewhere in the Editors code that makes it constantly check Editors, which is pointless... needs improved.
 11. It can behave very erratically when GL/Editor is AFK or DND.  I know WHY that is but code might be able to be improved to do something else in this situation instead of fail (ie get data from another user?)
+12. Broadcast DKP to raid is Alphabetical (Z first) reverse.
 
 
 Features to consider for the distant future:
