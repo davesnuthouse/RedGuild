@@ -561,6 +561,28 @@ end
 --------------------------------------------------------------------
 -- UPDATE ONLINE EDITORS + VERSION NEGOTIATION
 --------------------------------------------------------------------
+
+local function GetHighestRankEditor()
+    D("GetHighestRankEditor called")
+    EnsureOnlineEditors()
+
+    local bestName = nil
+    local bestRank = 99
+
+    for short, info in pairs(RedGuild_Config.onlineEditors) do
+        local realName = info.name
+        local rankIndex = info.rankIndex or 99
+
+        if rankIndex < bestRank then
+            bestRank = rankIndex
+            bestName = realName
+        end
+    end
+
+    D("Highest rank editor = " .. tostring(bestName))
+    return bestName
+end
+
 local function UpdateOnlineEditors()
     if not IsInGuild() then return end
 
@@ -611,27 +633,6 @@ local function UpdateOnlineEditors()
             RedGuild_Send("EDITORREQ", me, info.name)
         end
     end
-end
-
-local function GetHighestRankEditor()
-    D("GetHighestRankEditor called")
-    EnsureOnlineEditors()
-
-    local bestName = nil
-    local bestRank = 99
-
-    for short, info in pairs(RedGuild_Config.onlineEditors) do
-        local realName = info.name
-        local rankIndex = info.rankIndex or 99
-
-        if rankIndex < bestRank then
-            bestRank = rankIndex
-            bestName = realName
-        end
-    end
-
-    D("Highest rank editor = " .. tostring(bestName))
-    return bestName
 end
 
 local function DebugSync(prefix, direction, sender, msg)
