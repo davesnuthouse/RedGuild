@@ -32,9 +32,10 @@ local dkpPanel, raidPanel, editorsPanel, auditPanel
 
 local TAB_DKP     = 1
 local TAB_GROUP   = 2
-local TAB_RAID    = 3
-local TAB_EDITORS = 4
-local TAB_AUDIT   = 5
+local TAB_ML      = 3
+local TAB_RAID    = 4
+local TAB_EDITORS = 5
+local TAB_AUDIT   = 6
 
 local activeTab = TAB_DKP
 
@@ -110,6 +111,14 @@ local REDGUILD_MAX_CHUNK = 200  -- keep well under 255-byte whisper limit
 local RedGuild_OutboundSeq = 0
 
 function RedGuild_Send(msgType, payload, target)
+
+	-- BLOCK ALL OUTGOING MESSAGES TO NON-ADDON USERS
+	local key = NormalizeName(target)
+	if not RedGuild_Config.addonUsers[key] then
+		D("SEND BLOCKED → " .. tostring(target) .. " is not an addon user")
+		return
+	end
+
     if not target or target == "" then
         DEFAULT_CHAT_FRAME:AddMessage("|cffff0000[RedGuild SENDDBG]|r missing target for msgType="..tostring(msgType))
         return
@@ -208,6 +217,29 @@ local function TablesEqual(a, b)
     end
 
     return true
+end
+
+local function IsMasterLooter()
+    if not C_Loot or not C_Loot.GetLootMethod then
+        return false
+    end
+
+    local method, pid, rid = C_Loot.GetLootMethod()
+    if method ~= "master" then
+        return false
+    end
+
+    local me = UnitName("player")
+
+    if pid and pid >= 0 then
+        return UnitName("party"..pid) == me
+    end
+
+    if rid and rid >= 0 then
+        return UnitName("raid"..rid) == me
+    end
+
+    return false
 end
 
 --------------------------------------------------
@@ -591,7 +623,6 @@ local function GetHighestRankEditor()
 end
 
 local function UpdateOnlineEditors()
-    if not IsInGuild() then return end
 
     local total = GetNumGuildMembers()
     if total == 0 then
@@ -607,12 +638,25 @@ local function UpdateOnlineEditors()
             local real = Ambiguate(name, "short")
             local key  = NormalizeName(real)
 
-            if RedGuild_Config.authorizedEditors[key] and online then
-                RedGuild_Config.onlineEditors[key] = {
-                    name = real,
-                    rankIndex = rankIndex
-                }
-            end
+local hasList = next(RedGuild_Config.authorizedEditors) ~= nil
+
+-- If user has no editor list yet, treat ALL guild officers as editors
+local isEditor = false
+
+if hasList then
+    -- Normal mode: use the real editor list
+    isEditor = RedGuild_Config.authorizedEditors[key]
+else
+    -- Bootstrap mode: treat officers as editors
+    isEditor = (rankIndex <= 2)   -- 0 = GM, 1 = lunatics, 2 = warmaster
+end
+
+if isEditor and online then
+    RedGuild_Config.onlineEditors[key] = {
+        name = real,
+        rankIndex = rankIndex
+    }
+end
         end
     end
 
@@ -713,6 +757,7 @@ function ShowTab(id)
     dkpPanel:Hide()
     groupPanel:Hide()
     raidPanel:Hide()
+	mlPanel:Hide()
     editorsPanel:Hide()
     auditPanel:Hide()
 
@@ -722,6 +767,8 @@ function ShowTab(id)
         groupPanel:Show()
     elseif id == TAB_RAID then
         raidPanel:Show()
+	elseif id == TAB_ML then
+        mlPanel:Show()
     elseif id == TAB_EDITORS then
         editorsPanel:Show()
     elseif id == TAB_AUDIT then
@@ -1268,13 +1315,16 @@ local function CreateUI()
     --------------------------------------------------------------------
     -- TABS
     --------------------------------------------------------------------
-    CreateTab(TAB_DKP,   "DKP")
-    CreateTab(TAB_GROUP, "Group Builder")
-    if IsEditor(UnitName("player")) then
-        CreateTab(TAB_RAID,    "RL Tools")
-        CreateTab(TAB_EDITORS, "Editors")
-        CreateTab(TAB_AUDIT,   "Audit Log")
-    end
+	CreateTab(TAB_DKP,   "DKP")
+	CreateTab(TAB_GROUP, "Group Builder")
+	CreateTab(TAB_ML, "ML Tools")
+	
+	if IsEditor(UnitName("player")) then
+    CreateTab(TAB_RAID, "RL Tools")
+    CreateTab(TAB_EDITORS, "Editors")
+    CreateTab(TAB_AUDIT,   "Audit Log")
+	end
+
 	RealignTabs()
     --------------------------------------------------------------------
     -- PANELS
@@ -1294,6 +1344,7 @@ local function CreateUI()
 	end)
 	
     groupPanel   = CreateFrame("Frame", nil, mainFrame); LayoutPanel(groupPanel)
+	mlPanel      = CreateFrame("Frame", nil, mainFrame); LayoutPanel(mlPanel)
     raidPanel    = CreateFrame("Frame", nil, mainFrame); LayoutPanel(raidPanel)
     editorsPanel = CreateFrame("Frame", nil, mainFrame); LayoutPanel(editorsPanel)
     auditPanel   = CreateFrame("Frame", nil, mainFrame); LayoutPanel(auditPanel)
@@ -1575,6 +1626,353 @@ end)
 
     groupPanel:SetScript("OnHide", function()
         StopOnlineScan()
+end)
+end
+
+--------------------------------------------------------------------
+-- ML TOOLS PANEL
+--------------------------------------------------------------------
+do
+    ----------------------------------------------------------------
+    -- COLUMN HEADERS
+    ----------------------------------------------------------------
+    local headerFrame = CreateFrame("Frame", nil, mlPanel)
+    headerFrame:SetPoint("TOPLEFT", mlPanel, "TOPLEFT", 60, -40)
+    headerFrame:SetSize(600, 20)
+
+    local headers = {
+        { text = "Name",  width = 170 },
+        { text = "Main Spec",  width = 97  },
+        { text = "Off Spec",   width = 79  },
+        { text = "Notes", width = 260 },
+    }
+
+    local x = 0
+    for _, h in ipairs(headers) do
+        local fs = headerFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        fs:SetPoint("LEFT", headerFrame, "LEFT", x, 0)
+        fs:SetWidth(h.width)
+        fs:SetJustifyH("LEFT")
+        fs:SetText(h.text)
+        x = x + h.width + 5
+    end
+
+    ----------------------------------------------------------------
+    -- SCROLLING TABLE
+    ----------------------------------------------------------------
+    local scroll = CreateFrame("ScrollFrame", nil, mlPanel, "UIPanelScrollFrameTemplate")
+    scroll:SetPoint("TOPLEFT", mlPanel, "TOPLEFT", 60, -60)
+    scroll:SetPoint("BOTTOMRIGHT", mlPanel, "BOTTOMRIGHT", -45, 40)
+
+    local content = CreateFrame("Frame", nil, scroll)
+    content:SetSize(1, 1)
+    scroll:SetScrollChild(content)
+
+    local ROW_HEIGHT = 18
+    local MAX_ROWS   = 200
+    local COL_NAME   = 1
+    local COL_MAIN   = 2
+    local COL_OFF    = 3
+    local COL_NOTES  = 4
+
+    mlRows = {}
+
+    ----------------------------------------------------------------
+    -- CLICK HELPERS FOR MAIN/OFFSPEC
+    ----------------------------------------------------------------
+    local function AdjustMLValue(name, field, delta)
+        local d = RedGuild_Data[name]
+        if not d then return end
+
+        local old = tonumber(d[field] or 0) or 0
+        local new = old + delta
+        if new < 0 then new = 0 end
+
+        if new ~= old then
+            d[field] = new
+            LogAudit(name, field, old, new)
+        end
+    end
+
+----------------------------------------------------------------
+-- INLINE EDIT FOR NOTES
+----------------------------------------------------------------
+inlineEditML = CreateFrame("EditBox", nil, UIParent, "InputBoxTemplate")
+inlineEditML:SetAutoFocus(false)
+inlineEditML:SetSize(200, 18)
+inlineEditML:Hide()
+inlineEditML.cancelled = false
+inlineEditML:SetFrameStrata("HIGH")
+
+inlineEditML:SetScript("OnEscapePressed", function(self)
+    self.cancelled = true
+    self:Hide()
+end)
+
+inlineEditML:SetScript("OnEnterPressed", function(self)
+    self.cancelled = false
+    if self.saveFunc then self.saveFunc(self:GetText()) end
+    self:Hide()
+end)
+
+inlineEditML:SetScript("OnEditFocusLost", function(self)
+    if not self.cancelled and self.saveFunc then
+        self.saveFunc(self:GetText())
+    end
+    self:Hide()
+end)
+
+    ----------------------------------------------------------------
+    -- BUILD ROWS
+    ----------------------------------------------------------------
+    for i = 1, MAX_ROWS do
+        local row = CreateFrame("Frame", nil, content)
+        row:SetSize(1, ROW_HEIGHT)
+        row:SetPoint("TOPLEFT", 0, -(i - 1) * ROW_HEIGHT)
+
+        row.cols = {}
+
+        local x = 0
+        local widths = {
+            [COL_NAME]  = 150,
+            [COL_MAIN]  = 55,
+            [COL_OFF]   = 140,
+            [COL_NOTES] = 300,
+        }
+
+        for col = COL_NAME, COL_NOTES do
+            if col == COL_NAME then
+                local fs = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+                fs:SetPoint("LEFT", row, "LEFT", x, 0)
+                fs:SetWidth(widths[col])
+                fs:SetJustifyH("LEFT")
+                row.cols[col] = fs
+
+            elseif col == COL_MAIN or col == COL_OFF then
+                local btn = CreateFrame("Button", nil, row)
+                btn:SetPoint("LEFT", row, "LEFT", x, 0)
+                btn:SetSize(widths[col], ROW_HEIGHT)
+
+                local fs = btn:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+                fs:SetAllPoints()
+                fs:SetJustifyH("CENTER")
+                btn:SetFontString(fs)
+
+                btn:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+                btn:GetHighlightTexture():SetAlpha(0.3)
+
+                row.cols[col] = btn
+
+            elseif col == COL_NOTES then
+                local btn = CreateFrame("Button", nil, row)
+                btn:SetPoint("LEFT", row, "LEFT", x, 0)
+                btn:SetSize(widths[col], ROW_HEIGHT)
+
+                local fs = btn:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+                fs:SetAllPoints()
+                fs:SetJustifyH("LEFT")
+                btn:SetFontString(fs)
+
+                btn:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+                btn:GetHighlightTexture():SetAlpha(0.3)
+
+                row.cols[col] = btn
+            end
+
+            x = x + widths[col] + 5
+        end
+
+        mlRows[i] = row
+    end
+
+    content:SetHeight(MAX_ROWS * ROW_HEIGHT)
+
+    ----------------------------------------------------------------
+    -- REFRESH FUNCTION
+    ----------------------------------------------------------------
+    function RefreshMLTools()
+        if not mlRows then return end
+
+        local names = {}
+        for name in pairs(RedGuild_Data or {}) do
+            table.insert(names, name)
+        end
+        table.sort(names)
+
+        local i = 0
+        for _, name in ipairs(names) do
+            local d = RedGuild_Data[name]
+            if d and not d.invalid then
+                i = i + 1
+                local row = mlRows[i]
+                if not row then break end
+
+                row.name = name
+
+                local nameFS  = row.cols[COL_NAME]
+                local mainBtn = row.cols[COL_MAIN]
+                local offBtn  = row.cols[COL_OFF]
+                local notesBtn = row.cols[COL_NOTES]
+
+                local class = d.class
+                local color = RAID_CLASS_COLORS[class]
+                local hex = "|cffffffff"
+                if color then
+                    hex = string.format("|cff%02x%02x%02x", color.r*255, color.g*255, color.b*255)
+                end
+
+                nameFS:SetText(hex .. name .. "|r")
+
+                local mainVal = tonumber(d.mlMain or 0) or 0
+                local offVal  = tonumber(d.mlOff or 0) or 0
+
+                mainBtn:SetText(tostring(mainVal))
+                offBtn:SetText(tostring(offVal))
+
+                notesBtn:SetText(d.mlNotes or "")
+
+                mainBtn:SetScript("OnMouseDown", function(self, button)
+                    if button == "LeftButton" then
+                        AdjustMLValue(name, "mlMain", 1)
+                    elseif button == "RightButton" then
+                        AdjustMLValue(name, "mlMain", -1)
+                    end
+                    RefreshMLTools()
+                end)
+
+                offBtn:SetScript("OnMouseDown", function(self, button)
+                    if button == "LeftButton" then
+                        AdjustMLValue(name, "mlOff", 1)
+                    elseif button == "RightButton" then
+                        AdjustMLValue(name, "mlOff", -1)
+                    end
+                    RefreshMLTools()
+                end)
+
+                notesBtn:SetScript("OnMouseDown", function(self)
+
+    local d = RedGuild_Data[name]
+    if not d then return end
+
+    -- Hide the fontstring while editing
+    local fs = self:GetFontString()
+    fs:Hide()
+    inlineEdit.currentFS = fs
+
+    -- Reparent and reposition inlineEdit exactly like DKP
+    inlineEdit:ClearAllPoints()
+    inlineEdit:SetParent(self)
+    inlineEdit:SetPoint("LEFT", self, "LEFT", 0, 0)
+    inlineEdit:SetSize(self:GetWidth(), ROW_HEIGHT)
+
+    -- Load existing notes
+    inlineEdit:SetText(d.mlNotes or "")
+    inlineEdit:Show()
+    inlineEdit:SetFocus()
+
+    -- Save handler (same pattern as DKP)
+    inlineEdit.saveFunc = function(text)
+        local old = d.mlNotes or ""
+        local new = text or ""
+
+        if new ~= old then
+            d.mlNotes = new
+            LogAudit(name, "mlNotes", old, new)
+        end
+
+        -- Update the visible text immediately so it doesn't vanish
+        fs:SetText(new)
+        fs:Show()
+        inlineEdit.currentFS = nil
+    end
+end)
+
+                row:Show()
+            end
+        end
+
+        for j = i + 1, #mlRows do
+            mlRows[j].name = nil
+            mlRows[j]:Hide()
+        end
+    end
+
+    ----------------------------------------------------------------
+    -- BOTTOM WARNING
+    ----------------------------------------------------------------
+    local note = mlPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    note:SetPoint("BOTTOMLEFT", mlPanel, "BOTTOMLEFT", 10, 10)
+    note:SetJustifyH("LEFT")
+    note:SetText("|cffaaaaaaPlease note the broadcast button only work if you are the master looter.|r")
+
+    ----------------------------------------------------------------
+    -- BROADCAST DKP BUTTON (bottom-right, ML-gated)
+    ----------------------------------------------------------------
+    local broadcastBtn = CreateFrame("Button", nil, mlPanel, "UIPanelButtonTemplate")
+    broadcastBtn:SetSize(140, 24)
+    broadcastBtn:SetText("Broadcast DKP")
+    broadcastBtn:SetPoint("BOTTOMRIGHT", mlPanel, "BOTTOMRIGHT", -10, 10)
+    mlPanel.broadcastBtn = broadcastBtn
+
+    broadcastBtn:SetScript("OnClick", function()
+        if not IsMasterLooter() then
+            print("|cffff0000You must be the Master Looter to broadcast DKP.|r")
+            return
+        end
+        BroadcastDKPTable()
+    end)
+
+    local function UpdateMLToolsState()
+        if IsMasterLooter() then
+            mlPanel.broadcastBtn:Enable()
+        else
+            mlPanel.broadcastBtn:Disable()
+        end
+    end
+
+----------------------------------------------------------------
+-- RESET ML VALUES BUTTON
+----------------------------------------------------------------
+local resetBtn = CreateFrame("Button", nil, mlPanel, "UIPanelButtonTemplate")
+resetBtn:SetSize(100, 24)
+resetBtn:SetText("Reset")
+resetBtn:SetPoint("RIGHT", mlPanel.broadcastBtn, "LEFT", -10, 0)
+
+resetBtn:SetScript("OnClick", function()
+
+    for name, d in pairs(RedGuild_Data or {}) do
+        if d and not d.invalid then
+            local oldMain  = tonumber(d.mlMain or 0) or 0
+            local oldOff   = tonumber(d.mlOff or 0) or 0
+            local oldNotes = d.mlNotes or ""
+
+            if oldMain ~= 0 then
+                d.mlMain = 0
+                LogAudit(name, "mlMain", oldMain, 0)
+            end
+
+            if oldOff ~= 0 then
+                d.mlOff = 0
+                LogAudit(name, "mlOff", oldOff, 0)
+            end
+
+            if oldNotes ~= "" then
+                d.mlNotes = ""
+                LogAudit(name, "mlNotes", oldNotes, "")
+            end
+        end
+    end
+
+    RefreshMLTools()
+    print("|cff00ff00ML values reset for all players.|r")
+end)
+
+    ----------------------------------------------------------------
+    -- PANEL SHOW
+    ----------------------------------------------------------------
+    mlPanel:SetScript("OnShow", function()
+        RefreshMLTools()
+        UpdateMLToolsState()
     end)
 end
 
@@ -1582,60 +1980,92 @@ end
     -- RL TOOLS PANEL
     --------------------------------------------------------------------
     do
-        local onTimeBtn = CreateFrame("Button", nil, raidPanel, "UIPanelButtonTemplate")
-        onTimeBtn:SetSize(200, 30)
-        onTimeBtn:SetPoint("TOP", raidPanel, "TOP", 0, -40)
-        onTimeBtn:SetText("Allocate On Time DKP")
-        onTimeBtn:SetScript("OnClick", function()
-            if not IsRaidLeaderOrMasterLooter() then
-                Print("Only the raid leader or master looter can perform this function.")
-                return
-            end
-            if UsedToday("onTime") then
-                Print("Already allocated today.")
-                return
-            end
-            StaticPopup_Show("REDGUILD_ON_TIME_CHECK")
-            MarkUsedToday("onTime")
-        end)
+    local onTimeBtn = CreateFrame("Button", nil, raidPanel, "UIPanelButtonTemplate")
+    onTimeBtn:SetSize(200, 30)
+    onTimeBtn:SetPoint("TOP", raidPanel, "TOP", 0, -40)
+    onTimeBtn:SetText("Allocate On Time DKP")
+    onTimeBtn:SetScript("OnClick", function()
+        if not IsRaidLeaderOrMasterLooter() then
+            Print("Only the raid leader or master looter can perform this function.")
+            return
+        end
+        if UsedToday("onTime") then
+            Print("Already allocated today.")
+            return
+        end
+        StaticPopup_Show("REDGUILD_ON_TIME_CHECK")
+        MarkUsedToday("onTime")
+    end)
 
-        local attendanceBtn = CreateFrame("Button", nil, raidPanel, "UIPanelButtonTemplate")
-        attendanceBtn:SetSize(200, 30)
-        attendanceBtn:SetPoint("TOP", onTimeBtn, "BOTTOM", 0, -20)
-        attendanceBtn:SetText("Allocate Attendance DKP")
-        attendanceBtn:SetScript("OnClick", function()
-            if not IsRaidLeaderOrMasterLooter() then
-                Print("Only the raid leader or master looter can perform this function.")
-                return
-            end
-            if UsedToday("attendance") then
-                Print("Already allocated today.")
-                return
-            end
-            StaticPopup_Show("REDGUILD_ALLOCATE_ATTENDANCE")
-            MarkUsedToday("attendance")
-        end)
+    local attendanceBtn = CreateFrame("Button", nil, raidPanel, "UIPanelButtonTemplate")
+    attendanceBtn:SetSize(200, 30)
+    attendanceBtn:SetPoint("TOP", onTimeBtn, "BOTTOM", 0, -20)
+    attendanceBtn:SetText("Allocate Attendance DKP")
+    attendanceBtn:SetScript("OnClick", function()
+        if not IsRaidLeaderOrMasterLooter() then
+            Print("Only the raid leader or master looter can perform this function.")
+            return
+        end
+        if UsedToday("attendance") then
+            Print("Already allocated today.")
+            return
+        end
+        StaticPopup_Show("REDGUILD_ALLOCATE_ATTENDANCE")
+        MarkUsedToday("attendance")
+    end)
 
-        local newWeekBtn = CreateFrame("Button", nil, raidPanel, "UIPanelButtonTemplate")
-        newWeekBtn:SetSize(200, 30)
-        newWeekBtn:SetPoint("TOP", attendanceBtn, "BOTTOM", 0, -20)
-        newWeekBtn:SetText("Start a New DKP Week")
-        newWeekBtn:SetScript("OnClick", function()
-            if not IsAuthorized() then
-                Print("Only editors can start a new DKP week.")
-                return
-            end
-            StaticPopup_Show("REDGUILD_NEW_WEEK")
-        end)
+    -- NEW: Allocate Bench
+    local benchBtn = CreateFrame("Button", nil, raidPanel, "UIPanelButtonTemplate")
+    benchBtn:SetSize(200, 30)
+    benchBtn:SetPoint("TOP", attendanceBtn, "BOTTOM", 0, -20)
+    benchBtn:SetText("Allocate Bench")
+    benchBtn:SetScript("OnClick", function()
+        if not IsRaidLeaderOrMasterLooter() then
+            Print("Only the raid leader or master looter can perform this function.")
+            return
+        end
 
-        local broadcastBtn = CreateFrame("Button", nil, raidPanel, "UIPanelButtonTemplate")
-        broadcastBtn:SetSize(220, 30)
-        broadcastBtn:SetPoint("BOTTOM", raidPanel, "BOTTOM", 0, 10)
-        broadcastBtn:SetText("Broadcast DKP Table to Raid")
-        broadcastBtn:SetScript("OnClick", function()
-            StaticPopup_Show("REDGUILD_BROADCAST_DKP")
-        end)
-    end
+        if not IsInRaid() then
+            Print("You must be in a raid to allocate bench DKP.")
+            return
+        end
+
+        local function ApplyBench()
+            for i = 1, GetNumGroupMembers() do
+                local name, _, _, _, _, _, _, online = GetRaidRosterInfo(i)
+                if name then
+                    local short = Ambiguate(name, "short")
+                    local d = RedGuild_Data[short]
+                    if d then
+                        local old = tonumber(d.attendance or 0) or 0
+                        local new = old + 15
+                        if new > 30 then new = 30 end
+                        if new ~= old then
+                            d.attendance = new
+                            LogAudit(short, "attendance", old, new)
+                        end
+                    end
+                end
+            end
+            UpdateTable()
+            Print("Bench DKP allocated to raid members (up to a maximum of 30).")
+        end
+
+        ApplyBench()
+    end)
+
+    local newWeekBtn = CreateFrame("Button", nil, raidPanel, "UIPanelButtonTemplate")
+    newWeekBtn:SetSize(200, 30)
+    newWeekBtn:SetPoint("BOTTOM", raidPanel, "BOTTOM", 0, 10)
+    newWeekBtn:SetText("Start a New DKP Week")
+    newWeekBtn:SetScript("OnClick", function()
+        if not IsAuthorized() then
+            Print("Only editors can start a new DKP week.")
+            return
+        end
+        StaticPopup_Show("REDGUILD_NEW_WEEK")
+    end)
+end
 
     --------------------------------------------------------------------
     -- EDITORS PANEL
@@ -2673,15 +3103,16 @@ end
 local function AttemptAutoSync()
     D("AttemptAutoSync called")
 
+	if GetNumGuildMembers() == 0 then
+    D("Guild roster not ready — delaying auto-sync")
+    C_Timer.After(1, AttemptAutoSync)
+    return
+	end
+
     EnsureSaved()
     EnsureAddonUsers()
     UpdateOnlineEditors()
     EnsureOnlineEditors()
-
-    if not next(RedGuild_Config.authorizedEditors) then
-        SafeSetSyncWarning("Waiting for editor list...")
-        return
-    end
 
     local me = UnitName("player")
     if not me then
@@ -3102,7 +3533,7 @@ eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4, arg5)
     end
 
 ---------------------------------------------------------
--- 4. CHAT_MSG_WHISPER (all REDGUILD sync traffic)
+-- 4. CHAT_MSG_WHISPER
 ---------------------------------------------------------
 if event == "CHAT_MSG_WHISPER" then
 
@@ -3110,6 +3541,55 @@ if event == "CHAT_MSG_WHISPER" then
     if not text or not sender then return end
 
     sender = Ambiguate(sender, "short")
+
+    -----------------------------------------------------
+    -- AUTO-REPLY: "What is my DKP?"
+    -----------------------------------------------------
+do
+    local lower = text:lower()
+    if lower:find("what is my dkp", 1, true) or lower:find("whats my dkp", 1, true)  or lower:find("what's my dkp", 1, true) then
+
+        if IsAuthorized() then
+            local d = RedGuild_Data[sender]
+
+            if d then
+                -- Correctly calculate balance (Lua requires parentheses for multiline)
+                d.balance = (
+                    (d.lastWeek or 0)
+                    + (d.onTime or 0)
+                    + (d.attendance or 0)
+                    + (d.bench or 0)
+                    - (d.spent or 0)
+                )
+
+                local balance = tonumber(d.balance or 0) or 0
+
+                -- Build the reply using the correct variable
+                local reply = string.format("Your DKP: %d", balance)
+
+                -- Escape pipes so Blizzard doesn't choke
+                reply = reply:gsub("|", "||")
+
+                -- Validate target
+                if not sender or sender == "" then
+                    print("Whisper reply failed: no sender")
+                    return
+                end
+
+                -- Send the whisper
+                SendChatMessage(reply, "WHISPER", nil, sender)
+
+            else
+                SendChatMessage(
+                    "I don't have any DKP data recorded for you yet.",
+                    "WHISPER", nil, sender
+                )
+            end
+        end
+
+        return
+    end
+end
 
     -----------------------------------------------------
     -- CHUNKED MESSAGES (DATA / EDITORSYNC)
@@ -3222,13 +3702,8 @@ if event == "CHAT_MSG_WHISPER" then
         local requester = NormalizeName(payload)
         if not requester then return end
 
-        ---------------------------------------------------------
-        -- RULE 4: Only respond to addon users
-        ---------------------------------------------------------
-        if not RedGuild_Config.addonUsers[requester] then
-            D("EDITOR SYNC → Ignoring request from non-addon user " .. tostring(requester))
-            return
-        end
+		-- FIX: mark requester as addon user
+		MarkAddonUserOnline(requester)
 
         ---------------------------------------------------------
         -- RULE 2: Only editors respond
