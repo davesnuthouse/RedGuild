@@ -36,17 +36,20 @@ Missing functionality I want to add/chage ASAP:
 Known Bugs:
 1. (Fixed but blurry as all hell) Addon icon not displaying on the addons list
 2. (Fixed) Top row record can show above the window when editing + scrolling
-3. (Possibly Fixed) Audit log is back to showing lots of "unknowns" (display issue the data is there)
+3. (Fixed) Audit log is back to showing lots of "unknowns" (display issue the data is there)
 4. (Fixed) Minimap button being a twat (needs a full rebuild and Lib file)
 5. (Fixed) Clicking away from edit value on DKP table doesnt deslect value (like pressing enter would)
 6. (Fixed) On first load the dkp table displays blank, it takes a /reload for the data to display
-7. (fixed)It has lost formatting on the editors list due to fixing name sync issues (likely cosmetic)
+7. (fixed) It has lost formatting on the editors list due to fixing name sync issues (likely cosmetic)
 8. (Fixed) After fixing 5 the window can nolonger be moved on the DKP tab
 9. (Fixed) The group invites spams the user untill they accept the invite rather than once 
 10. (Fixed) Personally it feels like there's a loop somewhere in the Editors code that makes it constantly check Editors, which is pointless... needs improved.
 11. It can behave very erratically when GL/Editor is AFK or DND.  I know WHY that is but code might be able to be improved to do something else in this situation instead of fail (ie get data from another user?)
-12. Broadcast DKP to raid is Alphabetical (Z first) reverse.
+12. (Fixed) Broadcast DKP to raid is Alphabetical (Z first) reverse.
 13. (Fixed - TLDR wasnt true) No editors online functionality needs imroving, most specifically the red warnings but just more ways for it to sync itself without waiting for manual.  It is possible that this is only true because of the editor sync issue.  Currently it looks like the warnings don't refresh but the addon knows an editor as come online (manual sync works).  So there's a mismatch there that needs looked into.
+14. Notes on ML whiteboard don't work and the AI made it worse.
+15. (fixed) If previous editor gets rid of addon they get whisper spam from addon users.
+16. On DKP whisper reply the Balance is 0
 
 
 Features to consider for the distant future:
@@ -56,10 +59,12 @@ Features to consider for the distant future:
 4. (Done - because someone speshul wanted this most) Mass Invite functionality
 5. Raid group planner?
 6. (Done) Some way to record players roles
-7. ML whiteboard
+7. (Done) ML whiteboard
 8. Filter option for the dkp table
 9. Guild crafting info?
 
 
 Next tests:
 
+1. Editor Sync over and over again till it's figured out
+2. Whisper function
