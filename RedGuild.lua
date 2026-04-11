@@ -333,9 +333,18 @@ end
 
 local function NormalizeName(name)
     if not name then return nil end
+
+    -- Remove realm suffix
     name = Ambiguate(name, "short")
     if not name or name == "" then return nil end
-    return name:lower():gsub("%s+", "")
+
+    -- Strip leading/trailing whitespace
+    name = name:gsub("^%s*(.-)%s*$", "%1")
+
+    -- Lowercase + remove spaces
+    name = name:lower():gsub("%s+", "")
+
+    return name
 end
 
 local function IsAuthorized()
@@ -392,20 +401,18 @@ function LogAudit(player, field, old, new)
 end
 
 local function IsNameInGuild(name)
-    if not IsInGuild() then
-        return false
-    end
+    if not IsInGuild() then return false end
+    if not name or name == "" then return false end
 
-    local total = GetNumGuildMembers()
-    if total == 0 then
-        -- Guild roster not ready yet: assume valid for now
-        return true
-    end
+    local norm = NormalizeName(name)
 
-    for i = 1, total do
+    for i = 1, GetNumGuildMembers() do
         local gName = GetGuildRosterInfo(i)
-        if gName and Ambiguate(gName, "short") == name then
-            return true
+        if gName then
+            local short = Ambiguate(gName, "short")
+            if NormalizeName(short) == norm then
+                return true, short   -- return TRUE and the properly capitalized guild name
+            end
         end
     end
 
@@ -771,10 +778,11 @@ local scroll
 local scrollChild
 
 function UpdateTable()
-
     sortedNames = {}
 
-    -- Reset all row indexes to avoid stale references
+    ----------------------------------------------------------------
+    -- RESET ROW INDEXES
+    ----------------------------------------------------------------
     for i = 1, #rows do
         rows[i].index = nil
     end
@@ -798,19 +806,15 @@ function UpdateTable()
     ----------------------------------------------------------------
     for name, d in pairs(RedGuild_Data) do
 
-        ------------------------------------------------------------
-        -- VALIDATE GUILD MEMBERSHIP
-        ------------------------------------------------------------
+        -- Validate guild membership
         if not IsNameInGuild(name) then
-            d.note = "(check name)"
+            d.note = "(not in guild)"
             d.invalid = true
         else
             d.invalid = false
         end
 
-        ------------------------------------------------------------
-        -- FILTER OUT INVALID OR CORRUPTED KEYS
-        ------------------------------------------------------------
+        -- Filter out invalid or corrupted keys
         if not d.invalid and type(name) == "string" then
             local trimmed = strtrim(name)
             if trimmed ~= "" then
@@ -820,7 +824,7 @@ function UpdateTable()
     end
 
     ----------------------------------------------------------------
-    -- CLEAN SORTED NAMES (remove any nil / non-string / empty)
+    -- CLEAN SORTED NAMES
     ----------------------------------------------------------------
     do
         local cleaned = {}
@@ -836,11 +840,10 @@ function UpdateTable()
     end
 
     ----------------------------------------------------------------
-    -- SORTING (NIL-SAFE)
+    -- SORTING
     ----------------------------------------------------------------
     if currentSortField == "name" then
 
-        -- Simple alphabetical sort
         table.sort(sortedNames, function(a, b)
             if currentSortAscending then
                 return a < b
@@ -860,23 +863,19 @@ function UpdateTable()
             local field = currentSortField
             local va, vb
 
-            -- ROLE SORT (string)
             if field == "msRole" or field == "osRole" then
                 va = tostring(da[field] or "")
                 vb = tostring(db[field] or "")
 
-            -- ROTATED SORT (boolean)
             elseif field == "rotated" then
-				va = tonumber(da.rotated) or 0
-				vb = tonumber(db.rotated) or 0
+                va = tonumber(da.rotated) or 0
+                vb = tonumber(db.rotated) or 0
 
-            -- NUMERIC SORT (default)
             else
                 va = tonumber(da[field]) or 0
                 vb = tonumber(db[field]) or 0
             end
 
-            -- Primary comparison
             if va ~= vb then
                 if currentSortAscending then
                     return va < vb
@@ -885,10 +884,8 @@ function UpdateTable()
                 end
             end
 
-            -- Tie-breaker: name
             return a < b
         end)
-
     end
 
     ----------------------------------------------------------------
@@ -898,17 +895,36 @@ function UpdateTable()
         local row  = rows[i]
         local name = sortedNames[i]
 
+        ----------------------------------------------------------------
+        -- EMPTY ROW CLEANUP
+        ----------------------------------------------------------------
         if not name then
-
+            row.index = nil
             row:Hide()
 
-        else
+            if row.cols then
+                for _, col in ipairs(row.cols) do
+                    if col.Hide then
+                        col:Hide()
+                    elseif col.SetText then
+                        col:SetText("")
+                    end
+                end
+            end
 
+            if row.deleteButton then row.deleteButton:Hide() end
+            if row.tellButton   then row.tellButton:Hide()   end
+
+        else
+            ----------------------------------------------------------------
+            -- POPULATE REAL ROW
+            ----------------------------------------------------------------
             local d = RedGuild_Data[name]
             row.index = i
 
             RecalcBalance(d)
 
+            -- Class colour
             local classColor = "|cffffffff"
             if d.class then
                 local c = RAID_CLASS_COLORS[d.class]
@@ -920,7 +936,7 @@ function UpdateTable()
 
             local displayName = name
             if d.invalid then
-                displayName = displayName .. " |cffff0000(check name)|r"
+                displayName = displayName .. " |cffff0000(not in guild)|r"
             end
 
             -- NAME
@@ -962,7 +978,9 @@ function UpdateTable()
 
             -- ROTATED
             local rot = tonumber(d.rotated) or 0
-			row.cols[10]:SetText(rot)
+            row.cols[10]:SetText(rot)
+
+            row:Show()
         end
     end
 
@@ -1091,7 +1109,15 @@ local function ApplyEditorList(payload)
     ---------------------------------------------------------
     -- Apply new list
     ---------------------------------------------------------
-    RedGuild_Config.authorizedEditors = incomingEditors
+    local normalized = {}
+	for key, v in pairs(incomingEditors) do
+		local nk = NormalizeName(key)
+		if nk and nk ~= "" then
+			normalized[nk] = true
+		end
+	end
+
+RedGuild_Config.authorizedEditors = normalized
     RedGuild_Config.editorListVersion = incomingVersion
 
     D("EDITOR SYNC → Applied new editor list (version " .. incomingVersion .. ")")
@@ -1691,57 +1717,100 @@ end
 
         local removeNote = editorsPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
         removeNote:SetPoint("TOPLEFT", removeBtn, "BOTTOMLEFT", 0, -4)
-        removeNote:SetText("|cffaaaaaa* select name from list and click to remove|r")
+        removeNote:SetText("|cffaaaaaa* select name and click to remove|r")
 
         editorsPanel.selectedEditor = nil
 
-        addBtn:SetScript("OnClick", function()
-            if not (IsGuildOfficer() or IsEditor(UnitName("player"))) then
-                Print("Only guild leader or editors can add to the editor list.")
-                return
-            end
-            local raw = addBox:GetText()
-			local key = NormalizeName(raw)
-			if not key then return end
-			EnsureSaved()
-			RedGuild_Config.authorizedEditors[key] = true
-            RedGuild_Config.editorListVersion = (RedGuild_Config.editorListVersion or 0) + 1
-            addBox:SetText("")
-            RefreshEditorList()
-			-- Broadcast to all known addon users
-			local me = NormalizeName(UnitName("player"))
-for name in pairs(RedGuild_Config.addonUsers) do
-    if name ~= me and IsPlayerOnline(name) then
-        BroadcastEditorListTo(name)
-        D("Broadcasting editor list to " .. tostring(name))
+addBtn:SetScript("OnClick", function()
+    if not (IsGuildOfficer() or IsEditor(UnitName("player"))) then
+        Print("Only guild leader or editors can add to the editor list.")
+        return
     end
-end
-        end)
+
+    local raw = addBox:GetText()
+    if not raw or raw == "" then
+        Print("|cffff0000RedGuild:|r No name entered.")
+        return
+    end
+
+    local short = Ambiguate(raw, "short")
+    local ok, proper = IsNameInGuild(short)
+    if not ok then
+        Print("|cffff0000RedGuild:|r Cannot add editor — player is not in your guild.")
+        return
+    end
+
+    short = proper
+    local key = NormalizeName(short)
+
+    EnsureSaved()
+
+    if RedGuild_Config.authorizedEditors[key] then
+        Print("|cffffff00RedGuild:|r " .. short .. " is already an editor.")
+        return
+    end
+
+    RedGuild_Config.authorizedEditors[key] = true
+    RedGuild_Config.editorListVersion = (RedGuild_Config.editorListVersion or 0) + 1
+
+    addBox:SetText("")
+    RefreshEditorList()
+
+    -- Broadcast to all addon users
+    local me = NormalizeName(UnitName("player"))
+    for name in pairs(RedGuild_Config.addonUsers) do
+        if name ~= me and IsPlayerOnline(name) then
+            BroadcastEditorListTo(name)
+        end
+    end
+end)
 
         removeBtn:SetScript("OnClick", function()
-            if not (IsGuildOfficer() or IsEditor(UnitName("player"))) then
+            if not IsGuildOfficer() then
                 Print("Only guild leader can remove from the editor list.")
                 return
             end
 
-            local display = editorsPanel.selectedEditor
-			if not display then return end
+            local selected = editorsPanel.selectedEditor
+            if not selected or selected == "" then
+                Print("|cffff0000RedGuild:|r No editor selected.")
+                return
+            end
 
-			local key = NormalizeName(display)
-			if not key then return end
+            local key = NormalizeName(selected)
+            if not key then
+                Print("|cffff0000RedGuild:|r Invalid selected name.")
+                return
+            end
 
-			RedGuild_Config.authorizedEditors[key] = nil
+            EnsureSaved()
+
+            -- Protected editor (guild leader) cannot be removed
+            local protected = RedGuild_Config.protectedEditor
+            if protected and key == protected then
+                Print("|cffff0000RedGuild:|r You cannot remove the protected editor (guild leader).")
+                return
+            end
+
+            if not RedGuild_Config.authorizedEditors[key] then
+                Print("|cffff0000RedGuild:|r That name is not in the editor list.")
+                return
+            end
+
+            RedGuild_Config.authorizedEditors[key] = nil
             RedGuild_Config.editorListVersion = (RedGuild_Config.editorListVersion or 0) + 1
+
             editorsPanel.selectedEditor = nil
             RefreshEditorList()
-			-- Broadcast to all known addon users
-			local me = NormalizeName(UnitName("player"))
-for name in pairs(RedGuild_Config.addonUsers) do
-    if name ~= me and IsPlayerOnline(name) then
-        BroadcastEditorListTo(name)
-        D("Broadcasting editor list to " .. tostring(name))
-    end
-end
+
+            -- Broadcast updated editor list to all known addon users
+            EnsureConfig()
+            local me = NormalizeName(UnitName("player"))
+            for name in pairs(RedGuild_Config.addonUsers) do
+                if name ~= me and IsPlayerOnline(name) then
+                    BroadcastEditorListTo(name)
+                end
+            end
         end)
 
         editorsPanel:SetScript("OnShow", function()
@@ -2305,42 +2374,48 @@ end
             addButton:Hide()
         end
 
-        addButton:SetScript("OnClick", function()
-            if not IsAuthorized() then
-                Print("Only editors can add DKP records.")
-                return
-            end
+addButton:SetScript("OnClick", function()
+    if not IsAuthorized() then
+        Print("Only editors can add DKP records.")
+        return
+    end
 
-            local name = addInput:GetText():gsub("%s+", "")
-            if name == "" then return end
+    local raw = addInput:GetText()
+    if not raw or raw == "" then return end
 
-            local upper = string.upper(name)
-            for existingName in pairs(RedGuild_Data) do
-                if string.upper(existingName) == upper then
-                    Print("|cffff0000A DKP record already exists for:|r " .. existingName)
-                    return
-                end
-            end
+    local short = Ambiguate(raw, "short")
+    if not short or short == "" then return end
 
-            local d = EnsurePlayer(name)
+    -- Validate guild membership (hard reject)
+    local ok, proper = IsNameInGuild(short)
+    if not ok then
+        Print("|cffff0000RedGuild:|r Cannot add DKP record — player is not in your guild.")
+        return
+    end
 
-            local _, class = UnitClass(name)
-            if class then
-                d.class = class
-            elseif IsInGuild() then
-                for i = 1, GetNumGuildMembers() do
-                    local gName, _, _, _, _, _, _, _, _, _, gClass = GetGuildRosterInfo(i)
-                    if gName and Ambiguate(gName, "short") == name then
-                        d.class = gClass
-                        break
-                    end
-                end
-            end
+    local name = proper  -- use correct capitalization
 
-            addInput:SetText("")
-            UpdateTable()
-            Print("Added DKP record for " .. name)
-        end)
+    -- Duplicate check (case-insensitive)
+    local upper = string.upper(name)
+    for existingName in pairs(RedGuild_Data) do
+        if string.upper(existingName) == upper then
+            Print("|cffff0000A DKP record already exists for:|r " .. existingName)
+            return
+        end
+    end
+
+    local d = EnsurePlayer(name)
+
+    -- Assign class
+    local _, class = UnitClass(name)
+    if class then
+        d.class = class
+    end
+
+    addInput:SetText("")
+    UpdateTable()
+    Print("Added DKP record for " .. name)
+end)
     end
 
     --------------------------------------------------------------------
@@ -2658,6 +2733,13 @@ local function AttemptAutoSync()
 
     -- Request sync from the highest‑rank online editor via WHISPER
     local meReal = Ambiguate(me, "short")
+	
+	-- Request editor list first
+	local meReal = Ambiguate(me, "short")
+	local meNorm = NormalizeName(meReal)
+	RedGuild_Send("EDITORREQ", meReal, bestEditor)
+
+	-- Then request DKP sync
 	RedGuild_Send("REQUEST", meReal, bestEditor)
     if RedGuild_DKPFooter then
     local count = 0
@@ -2826,7 +2908,9 @@ StaticPopupDialogs["REDGUILD_BROADCAST_DKP"] = {
         for name in pairs(RedGuild_Data) do
             table.insert(names, name)
         end
-        table.sort(names, function(a, b) return a > b end)
+        table.sort(names, function(a, b)
+			return a:lower() < b:lower()
+		end)
 
         BroadcastNext(names, 1)
     end,
@@ -2940,6 +3024,14 @@ eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4, arg5)
 
         -- Minimap icon
         icon:Register("RedGuild", LDB, RedGuild_Config.minimap)
+		
+		-- Patch Blizzard GuildUtil bug (formatString nil)
+		hooksecurefunc("GuildNewsButton_SetText", function(button, text, formatString)
+			if not formatString then
+				-- Prevent Blizzard's nil-index crash
+				return
+			end
+		end)
 
         return
     end
@@ -3215,6 +3307,559 @@ SlashCmdList["REDGUILD"] = function(msg)
         return
     end
 
+StaticPopupDialogs["REDGUILD_FORCE_SYNC_RECEIVE"] = {
+    text = "Accept sync data from %s?",
+    button1 = "Accept",
+    button2 = "Decline",
+    OnAccept = function(self, editor)
+        RedGuild_Send("FORCE_ACCEPT", UnitName("player"), editor)
+    end,
+    OnCancel = function(self, editor)
+        RedGuild_Send("FORCE_DECLINE", UnitName("player"), editor)
+        SafeSetSyncWarning("WARNING — You declined sync. Your data may be outdated.")
+    end,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+}
+
+StaticPopupDialogs["REDGUILD_ON_TIME_CHECK"] = {
+    text = "Allocate On-Time DKP to all raid members?",
+    button1 = "Yes",
+    button2 = "No",
+    OnAccept = function()
+        if not IsRaidLeaderOrMasterLooter() then return end
+        for i = 1, GetNumGroupMembers() do
+            local name = GetRaidRosterInfo(i)
+            if name then
+                name = Ambiguate(name, "short")
+                local d = EnsurePlayer(name)
+                local old = d.onTime or 0
+                local new = old + 5
+				if new > 10 then
+					new = 10
+					Print("|cffff5555On-Time DKP cannot exceed 10 in a single DKP week. Value capped.|r")
+				end
+
+				d.onTime = new
+                RecalcBalance(d)
+                LogAudit(name, "onTime", old, d.onTime)
+            end
+        end
+        UpdateTable()
+        Print("On-Time DKP allocated.")
+    end,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+}
+
+StaticPopupDialogs["REDGUILD_ALLOCATE_ATTENDANCE"] = {
+    text = "Allocate Attendance DKP to all raid members?",
+    button1 = "Yes",
+    button2 = "No",
+    OnAccept = function()
+        if not IsRaidLeaderOrMasterLooter() then return end
+        for i = 1, GetNumGroupMembers() do
+            local name = GetRaidRosterInfo(i)
+            if name then
+                name = Ambiguate(name, "short")
+                local d = EnsurePlayer(name)
+                local old = d.attendance or 0
+                local new = old + 15
+				if new > 30 then
+					new = 30
+					Print("|cffff5555Attendance DKP cannot exceed 30 in a single DKP week. Value capped.|r")
+				end
+
+				d.attendance = new
+                RecalcBalance(d)
+                LogAudit(name, "attendance", old, d.attendance)
+            end
+        end
+        UpdateTable()
+        Print("Attendance DKP allocated.")
+    end,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+}
+
+StaticPopupDialogs["REDGUILD_NEW_WEEK"] = {
+    text = "Start a new DKP week? This will move current totals into LastWeek.",
+    button1 = "Yes",
+    button2 = "No",
+    OnAccept = function()
+        for name, d in pairs(RedGuild_Data) do
+            local oldBalance = d.balance or 0
+
+            d.lastWeek   = oldBalance
+            d.onTime     = 0
+            d.attendance = 0
+            d.bench      = 0
+            d.spent      = 0
+            d.balance    = 0
+
+            LogAudit(name, "LastWeek", "their previous balance of "..oldBalance, "prepare for new week")
+        end
+        UpdateTable()
+        Print("A new DKP week has begun.")
+    end,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+}
+
+StaticPopupDialogs["REDGUILD_BROADCAST_DKP"] = {
+    text = "Broadcast DKP table to the raid?",
+    button1 = "Yes",
+    button2 = "No",
+    OnAccept = function()
+        if not IsInRaid() then
+            Print("You must be in a raid to broadcast DKP.")
+            return
+        end
+
+        SendChatMessage("Name (Current Balance)", "RAID")
+
+        local names = {}
+        for name in pairs(RedGuild_Data) do
+            table.insert(names, name)
+        end
+        table.sort(names, function(a, b) return a > b end)
+
+        BroadcastNext(names, 1)
+    end,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+}
+
+-- LibDBIcon Minimap Button
+local LDB = LibStub("LibDataBroker-1.1"):NewDataObject("RedGuild", {
+    type = "data source",
+    text = "RedGuild",
+    icon = "Interface\\AddOns\\RedGuild\\media\\RedGuild_Minimap64.png",
+
+    OnClick = function(_, button)
+		if not RedGuild_UIReady then
+			return
+		end
+		
+        if not RedGuild_Enabled then
+            print("|cffff5555RedGuild is disabled for your character as you are not in Redemption guild.|r")
+            return
+        end
+
+        if button == "LeftButton" then
+            if mainFrame:IsShown() then
+                mainFrame:Hide()
+            else
+                mainFrame:Show()
+                ShowTab(TAB_DKP)
+            end
+
+        elseif button == "RightButton" then
+            mainFrame:Show()
+            ShowTab(TAB_DKP)
+        end
+    end,
+
+    OnTooltipShow = function(tt)
+        tt:AddLine("RedGuild")
+        tt:AddLine("|cff00ff00Left-click|r to open DKP")
+    end,
+})
+
+local icon = LibStub("LibDBIcon-1.0")
+
+local function EnsureMinimapConfig()
+    if not RedGuild_Config.minimap then
+        RedGuild_Config.minimap = { hide = false }
+    end
+end
+
+function RedGuild_ResetMinimapButton()
+    EnsureMinimapConfig()
+    RedGuild_Config.minimap.minimapPos = 45
+    icon:Refresh("RedGuild", RedGuild_Config.minimap)
+    print("|cff00ff00RedGuild minimap icon reset.|r")
+end
+
+-- Unified event frame
+local eventFrame = CreateFrame("Frame")
+eventFrame:RegisterEvent("ADDON_LOADED")
+eventFrame:RegisterEvent("PLAYER_LOGIN")
+eventFrame:RegisterEvent("GUILD_ROSTER_UPDATE")
+eventFrame:RegisterEvent("GROUP_ROSTER_UPDATE")
+eventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
+eventFrame:RegisterEvent("PLAYER_GUILD_UPDATE")
+eventFrame:RegisterEvent("CHAT_MSG_WHISPER")
+
+eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4, arg5)
+
+    --if addon == "RedGuild" then
+    --C_ChatInfo.RegisterAddonMessagePrefix(REDGUILD_CHAT_PREFIX) 
+    --end
+    ---------------------------------------------------------
+    -- 1. ADDON_LOADED
+    ---------------------------------------------------------
+    if event == "ADDON_LOADED" and arg1 == addonName then
+
+        -- Register addon prefix ONCE, at the correct time
+        C_ChatInfo.RegisterAddonMessagePrefix(REDGUILD_CHAT_PREFIX)
+
+        EnsureSaved()
+        EnsureMinimapConfig()
+
+        -- Normalize authorized editor keys
+        if RedGuild_Config and RedGuild_Config.authorizedEditors then
+            local fixed = {}
+            for name, v in pairs(RedGuild_Config.authorizedEditors) do
+                if type(name) == "string" then
+                    local key = name:lower():gsub("%s+", "")
+                    fixed[key] = true
+                end
+            end
+            RedGuild_Config.authorizedEditors = fixed
+        end
+
+        -- Populate class data if guild roster is already cached
+        if IsInGuild() then
+            for i = 1, GetNumGuildMembers() do
+                local gName, _, _, _, _, _, _, _, _, _, gClass = GetGuildRosterInfo(i)
+                if gName and gClass then
+                    gName = Ambiguate(gName, "short")
+                    local d = RedGuild_Data[gName]
+                    if d then
+                        d.class = gClass
+                    end
+                end
+            end
+        end
+
+        -- Minimap icon
+        icon:Register("RedGuild", LDB, RedGuild_Config.minimap)
+		
+		-- Patch Blizzard GuildUtil bug (formatString nil)
+		hooksecurefunc("GuildNewsButton_SetText", function(button, text, formatString)
+			if not formatString then
+				-- Prevent Blizzard's nil-index crash
+				return
+			end
+		end)
+
+        return
+    end
+
+    ---------------------------------------------------------
+    -- 2. PLAYER_LOGIN
+    ---------------------------------------------------------
+    if event == "PLAYER_LOGIN" then
+	
+		local me = NormalizeName(UnitName("player"))
+		RedGuild_Config.addonUsers[me] = true
+
+        CheckGuildRestriction()
+        CreateUI()
+        UpdateOnlineEditors()
+        C_GuildInfo.GuildRoster()
+
+        EnsureSaved()
+        EnsureProtectedEditor()
+
+        -- Small delay to let roster/chat settle, then auto-sync
+        C_Timer.After(3, function()
+            if not IsInGuild() then return end
+            AttemptAutoSync()
+        end)
+		
+		-- Periodic editor list refresh for users (every 60s)
+		C_Timer.NewTicker(60, function()
+			UpdateOnlineEditors()
+		end)
+		
+        return
+    end
+
+    ---------------------------------------------------------
+    -- 3. GUILD_ROSTER_UPDATE / PLAYER_GUILD_UPDATE
+    ---------------------------------------------------------
+    if event == "GUILD_ROSTER_UPDATE" or event == "PLAYER_GUILD_UPDATE" then
+        CheckGuildRestriction()
+        UpdateOnlineEditors()
+
+        if not firstRosterReady then
+            if IsInGuild() and GetNumGuildMembers() > 0 then
+                local anyName = select(1, GetGuildRosterInfo(1))
+                if anyName then
+                    firstRosterReady = true
+                    EnsureProtectedEditor()
+
+                    for i = 1, GetNumGuildMembers() do
+                        local gName, _, _, _, _, _, _, _, _, _, gClass = GetGuildRosterInfo(i)
+                        if gName and gClass then
+                            gName = Ambiguate(gName, "short")
+                            local d = RedGuild_Data[gName]
+                            if d then
+                                d.class = gClass
+                            end
+                        end
+                    end
+
+                    UpdateTable()
+                    RedGuild_SyncLocked = false
+                    SafeSetSyncWarning("")
+                end
+            end
+        end
+
+        return
+    end
+
+---------------------------------------------------------
+-- 4. CHAT_MSG_WHISPER (all REDGUILD sync traffic)
+---------------------------------------------------------
+if event == "CHAT_MSG_WHISPER" then
+
+    local text, sender = arg1, arg2
+    if not text or not sender then return end
+
+    sender = Ambiguate(sender, "short")
+
+    -----------------------------------------------------
+    -- CHUNKED MESSAGES (DATA / EDITORSYNC)
+    -----------------------------------------------------
+    if text:find("^" .. REDGUILD_CHAT_PREFIX .. ":DATA:") or
+       text:find("^" .. REDGUILD_CHAT_PREFIX .. ":EDITORSYNC:") then
+
+        -- NEW 6‑FIELD FORMAT:
+        -- PREFIX : TYPE : SEQ : PART : TOTAL : CHUNK
+        local prefix, msgType, seqStr, partStr, totalStr, chunk =
+            text:match("^([^:]+):([^:]+):(%d+):(%d+):(%d+):(.*)$")
+
+        if prefix and (msgType == "DATA" or msgType == "EDITORSYNC") then
+            local seq   = tonumber(seqStr)
+            local part  = tonumber(partStr)
+            local total = tonumber(totalStr)
+
+            if not seq or not part or not total then
+                return
+            end
+
+            D(string.format("WHISPER IN %s seq=%d part=%d/%d from=%s len=%d",
+                msgType, seq, part, total, sender, #chunk))
+
+            -- Ensure bucket exists
+            local bucket = REDGUILD_Inbound[msgType]
+            bucket[seq] = bucket[seq] or { parts = {}, total = total, from = sender }
+
+            local entry = bucket[seq]
+            entry.parts[part] = chunk
+            entry.total = total  -- ensure total is always stored
+
+            -----------------------------------------------------
+            -- COMPLETION CHECK
+            -----------------------------------------------------
+            local complete = true
+            for i = 1, entry.total do
+                if not entry.parts[i] then
+                    complete = false
+                    break
+                end
+            end
+
+            if complete then
+                D(string.format("CHUNK ASSEMBLY COMPLETE → %s", msgType))
+
+                local full = table.concat(entry.parts, "")
+                bucket[seq] = nil -- clear buffer
+
+                -----------------------------------------------------
+                -- APPLY DATA SYNC
+                -----------------------------------------------------
+                if msgType == "DATA" then
+                    ApplySyncData(entry.from or sender, full)
+                    return
+                end
+
+                -----------------------------------------------------
+                -- APPLY EDITOR LIST SYNC (version‑aware)
+                -----------------------------------------------------
+                if msgType == "EDITORSYNC" then
+                    D("EDITOR SYNC ← All parts received for EDITORSYNC from " .. tostring(entry.from))
+
+                    local decoded = LibDeflate:DecodeForPrint(full)
+                    if not decoded then
+                        D("EDITOR SYNC ERROR: DecodeForPrint failed")
+                        return
+                    end
+
+                    local decompressed = LibDeflate:DecompressDeflate(decoded)
+                    if not decompressed then
+                        D("EDITOR SYNC ERROR: DecompressDeflate failed")
+                        return
+                    end
+
+                    local ok, tbl = LibSerialize:Deserialize(decompressed)
+                    if not ok or type(tbl) ~= "table" then
+                        D("EDITOR SYNC ERROR: Deserialize failed or returned non-table")
+                        return
+                    end
+
+                    D("EDITOR SYNC ← Decoded table: version=" .. tostring(tbl.version)
+                        .. " editors=" .. tostring(tbl.editors and CountKeys(tbl.editors) or 0))
+
+                    ApplyEditorList(tbl)
+                    return
+                end
+            end
+
+            return
+        end
+    end
+
+    -----------------------------------------------------
+    -- FALLBACK: SIMPLE MESSAGES (REQUEST, FORCE_REQ, etc.)
+    -----------------------------------------------------
+    local prefix2, msgType2, payload = text:match("^([^:]+):([^:]+):(.*)$")
+    if prefix2 ~= REDGUILD_CHAT_PREFIX then
+        return
+    end
+
+    local msgType = msgType2
+
+    D("WHISPER IN type="..tostring(msgType).." from="..tostring(sender))
+
+    -----------------------------------------------------
+    -- EDITOR LIST REQUEST (EDITORREQ)
+    -----------------------------------------------------
+    if msgType == "EDITORREQ" then
+        local requester = NormalizeName(payload)
+        if not requester then return end
+
+        ---------------------------------------------------------
+        -- RULE 4: Only respond to addon users
+        ---------------------------------------------------------
+        if not RedGuild_Config.addonUsers[requester] then
+            D("EDITOR SYNC → Ignoring request from non-addon user " .. tostring(requester))
+            return
+        end
+
+        ---------------------------------------------------------
+        -- RULE 2: Only editors respond
+        ---------------------------------------------------------
+        if IsAuthorized() or IsGuildOfficer() then
+            BroadcastEditorListTo(requester)
+        end
+        return
+    end
+
+    -----------------------------------------------------
+    -- EDITOR LIST SYNC (fallback simple form)
+    -- (rarely used now; chunked handler above is primary)
+    -----------------------------------------------------
+    if msgType == "EDITORSYNC" then
+        local decoded = LibDeflate:DecodeForPrint(payload)
+        if not decoded then return end
+
+        local decompressed = LibDeflate:DecompressDeflate(decoded)
+        if not decompressed then return end
+
+        local ok, tbl = LibSerialize:Deserialize(decompressed)
+        if not ok or type(tbl) ~= "table" then return end
+
+        ApplyEditorList(tbl)
+        return
+    end
+
+    -----------------------------------------------------
+    -- SYNC REQUESTS
+    -----------------------------------------------------
+    if msgType == "REQUEST" then
+        HandleSyncRequest(payload, sender, false)
+        return
+    end
+
+    if msgType == "FORCE_REQ" then
+        StaticPopup_Show("REDGUILD_FORCE_SYNC_RECEIVE", sender, nil, sender)
+        return
+    end
+
+    if msgType == "FORCE_ACCEPT" then
+        HandleSyncResponse(sender, "FORCE_ACCEPT")
+        return
+    end
+
+    if msgType == "FORCE_DECLINE" then
+        HandleSyncResponse(sender, "FORCE_DECLINE")
+        return
+    end
+
+    -----------------------------------------------------
+    -- VERSION (ignored)
+    -----------------------------------------------------
+    if msgType == "VERSION" then
+        return
+    end
+
+    return
+end
+end)
+
+-- Slash Commands
+SLASH_REDGUILD1 = "/redguild"
+SlashCmdList["REDGUILD"] = function(msg)
+    msg = (msg or ""):lower():trim()
+
+    if msg == "show" then
+        mainFrame:Show()
+        ShowTab(TAB_DKP)
+        return
+    end
+
+    if msg == "hide" then
+        mainFrame:Hide()
+        return
+    end
+
+    if msg == "toggle" then
+        if mainFrame:IsShown() then
+            mainFrame:Hide()
+        else
+            mainFrame:Show()
+            ShowTab(TAB_DKP)
+        end
+        return
+    end
+
+    if msg == "minimap" then
+        RedGuild_ResetMinimapButton()
+        return
+    end
+
+    if msg == "debug" then
+        RedGuild_Debug = not RedGuild_Debug
+        if RedGuild_Debug then
+            print("|cff00ff00[RedGuild] Debug mode ENABLED|r")
+        else
+            print("|cffff0000[RedGuild] Debug mode DISABLED|r")
+        end
+        return
+	end
+
+    if msg == "help" or msg == "" then
+        print("|cffffd100RedGuild Commands:|r")
+        print("|cff00ff00/redguild show|r   - Open the DKP window")
+        print("|cff00ff00/redguild hide|r   - Hide the DKP window")
+        print("|cff00ff00/redguild toggle|r - Toggle the DKP window")
+        print("|cff00ff00/redguild minimap|r - Reset minimap icon position")
+        print("|cff00ff00/redguild help|r   - Show this help list")
+        return
+    end
+
+    print("|cffff5555Unknown command. Use /redguild help|r")
+end
     if msg == "toggle" then
         if mainFrame:IsShown() then
             mainFrame:Hide()
