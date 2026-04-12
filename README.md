@@ -32,6 +32,7 @@ Missing functionality I want to add/chage ASAP:
 18. (Done - add button too) There's no username validation on editor list, would be best to only allow guild users
 19. Improve EE use.
 20. Improve RL tools so you can manually select who to give points to?
+21. Update class/role icons to match the classes but still work on info
 
 
 Known Bugs:
