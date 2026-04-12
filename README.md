@@ -2,21 +2,19 @@ Addon is currently in prerelease so multiple errors are expected.
 
 Please report these under issues section (full BugSack data would be ideal)
 
-IS ADDON CURRENTLY SAFE TO USE : YES
-PLEASE NOTE - There's still a lot of error handling turned on so at times it might tell you things in chat that eventually it wont.  It also needs Lunátic to be online for it to pull data but that's next on the things to fix list.
+IS ADDON CURRENTLY SAFE TO USE : YES but it's functionality is super limited with no sync.
 
 
 Showstoppers:
 
-1. SYNC fuctionality WORKS!  However... SYNC is still not pulling down the editors list to the users machines.  That's not strictly show stopping for view but it does prevent anyone but me from updating it which is not ideal.
-2. Editor list sync now needs debugging to figure out where it's struggling.
+1. SYNC fuctionality was totally ruined by the addon to the point that nothing was salvagable.  Back to the drawing board and attempting to use the Blizz API's that would not work.  TLDR : Blizz enforce rules about the addon messages and if you dont match them it silently rejects all traffic.
 
 
 Missing functionality I want to add/chage ASAP:
 1. (Done) Cap on weekly ontime, attendance
 2. A prettier way to handle the tell/whisper option?
-3. Information on the DKP tab that shows the last time that users data was synced successfully
-4. Ability for folks to whisper an editor with "what's my DKP?" and get a whisper reply
+3. (Done) Information on the DKP tab that shows the last time that users data was synced successfully
+4. (Done) Ability for folks to whisper an editor with "what's my DKP?" and get a whisper reply
 5. (Done) Convert Minimap button to use Lib so it can hook into minimap addons (sexymap) better
 6. (Done) Restore the missing "has rotated" data from the DKP table"
 7. (Done) Restore the colours on the dkp table values that showed increases and decreases
@@ -24,7 +22,7 @@ Missing functionality I want to add/chage ASAP:
 9. A warning to the RL/ML that they have to allocate Attendance DKP before people leave the group
 10. (Done) Restore the chat window slash commmands
 11. (Done) Balance field shouldn't be able to be edited
-12. Add button to RL Tools to allocate bench award
+12. (Done) Add button to RL Tools to allocate bench award
 13. Add to the group builder info window a counter of how many people are in your group/raid and who is not from the selected users
 15. (Discuss with Mang) Remove request sync button from editor
 16. Retains the tickboxes on group builder (to prevent loss on a DC), due to this will also have to add a clear (and heck whynot a tick all) option.
@@ -50,7 +48,7 @@ Known Bugs:
 12. (Fixed) Broadcast DKP to raid is Alphabetical (Z first) reverse.
 13. (Fixed - TLDR wasnt true) No editors online functionality needs imroving, most specifically the red warnings but just more ways for it to sync itself without waiting for manual.  It is possible that this is only true because of the editor sync issue.  Currently it looks like the warnings don't refresh but the addon knows an editor as come online (manual sync works).  So there's a mismatch there that needs looked into.
 14. Notes on ML whiteboard don't work and the AI made it worse.
-15. (Fixed) If previous editor gets rid of addon they get whisper spam from addon users.
+15. If previous editor gets rid of addon they get whisper spam from addon users.
 16. (Fixed) On DKP whisper reply the Balance is 0
 
 
