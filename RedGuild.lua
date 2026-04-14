@@ -149,22 +149,23 @@ local function RedGuild_ShowForceSyncSummary()
 end
 
 local function RedGuild_GetSyncChannel(msgType, target)
-    -- Chunked, whisper‑targeted payloads
-    if msgType == "DATA"
-        or msgType == "EDITORSYNC"
-        or msgType == "FORCE_ACCEPT"
+    -- Small whisper responses
+    if msgType == "FORCE_ACCEPT"
         or msgType == "FORCE_DECLINE"
     then
         if not target then return nil, nil end
         return "WHISPER", GetExactName(target)
     end
 
-    -- FORCE_REQ is a guild broadcast (chunked)
-    if msgType == "FORCE_REQ" then
+    -- Chunked guild broadcasts
+    if msgType == "DATA"
+        or msgType == "EDITORSYNC"
+        or msgType == "FORCE_REQ"
+    then
         return "GUILD", nil
     end
 
-    -- Everything else uses guild broadcast
+    -- Everything else → guild
     return "GUILD", nil
 end
 
@@ -187,7 +188,7 @@ function RedGuild_Send(msgType, payload, target)
         actualTarget = Ambiguate(actualTarget, "none")
     end
 
-    -- Small messages
+    -- Small messages (everything except chunked types)
     if msgType ~= "DATA" and msgType ~= "EDITORSYNC" and msgType ~= "FORCE_REQ" then
         local msg = string.format("%s:%s:%s", REDGUILD_CHAT_PREFIX, msgType, payload)
         C_ChatInfo.SendAddonMessage(REDGUILD_CHAT_PREFIX, msg, channel, actualTarget)
@@ -211,12 +212,6 @@ function RedGuild_Send(msgType, payload, target)
         )
 
         C_ChatInfo.SendAddonMessage(REDGUILD_CHAT_PREFIX, msg, channel, actualTarget)
-    end
-end
-
-function RedGuild_RequestRoster()
-    if C_GuildInfo and type(C_GuildInfo.GuildRoster) == "function" then
-        return C_GuildInfo.GuildRoster()
     end
 end
 
@@ -1090,12 +1085,25 @@ end
 --------------------------------------------------------------------
 -- BROADCAST EDITOR LIST
 --------------------------------------------------------------------
-local function BroadcastEditorList()
+local function BroadcastEditorListTo(target)
     EnsureConfig()
 
-    for key, info in pairs(RedGuild_Config.onlineEditors or {}) do
-        BroadcastEditorListTo(info.name)
+    if not target or target == "" then
+        D("EDITOR SYNC → No target")
+        return
     end
+
+    local payload = {
+        editors = RedGuild_Config.authorizedEditors or {},
+        version = RedGuild_Config.editorListVersion or 0,
+    }
+
+    local serialized  = LibSerialize:Serialize(payload)
+    local compressed  = LibDeflate:CompressDeflate(serialized)
+    local encoded     = LibDeflate:EncodeForPrint(compressed)
+
+    D("EDITOR SYNC → Sending version " .. tostring(payload.version) .. " to " .. tostring(target))
+    RedGuild_Send("EDITORSYNC", encoded, target)
 end
 
 --------------------------------------------------------------------
@@ -3355,9 +3363,6 @@ eventFrame:RegisterEvent("CHAT_MSG_ADDON")
 
 eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4, arg5)
 
-    --if addon == "RedGuild" then
-    --C_ChatInfo.RegisterAddonMessagePrefix(REDGUILD_CHAT_PREFIX) 
-    --end
     ---------------------------------------------------------
     -- 1. ADDON_LOADED
     ---------------------------------------------------------
@@ -3509,13 +3514,14 @@ end
 -- 5. CHAT_MSG_ADDON (unified SYNC handler)
 ---------------------------------------------------------
 if event == "CHAT_MSG_ADDON" then
-    local prefix, msg, channel, sender = arg1, arg2, arg3, arg4
+    local prefix, raw, channel, sender = arg1, arg2, arg3, arg4
+	local msg = raw
     if prefix ~= REDGUILD_CHAT_PREFIX or not msg or not sender then
         return
     end
 
     sender = Ambiguate(sender, "short")
-
+	
     ---------------------------------------------------------
     -- CHUNKED MESSAGES (DATA / EDITORSYNC)
     ---------------------------------------------------------
