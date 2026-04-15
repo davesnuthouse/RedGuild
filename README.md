@@ -50,6 +50,7 @@ Known Bugs:
 14. Notes on ML whiteboard don't work and the AI made it worse.
 15. (Technically fixed as no longer exists) If previous editor gets rid of addon they get whisper spam from addon users.
 16. (Fixed) On DKP whisper reply the Balance is 0
+17. Table not refreshing after Add
 
 
 Features to consider for the distant future:
