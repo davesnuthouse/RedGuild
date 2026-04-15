@@ -47,6 +47,8 @@ Known Bugs:
 16. (Fixed) On DKP whisper reply the Balance is 0
 17. (Fixed) Table not refreshing after Add
 18. Add button also needs clicked twice (once for defocus and once to activate)
+19. Delete functionality causes display issue on dkp table (data is fine)
+20. ML tools table needs to be 'reset' to show changes to dkp table
 
 
 Features to consider for the distant future:
