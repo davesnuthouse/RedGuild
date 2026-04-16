@@ -3,7 +3,7 @@ Addon is currently in prerelease so multiple errors are expected.
 Please report these under issues section (full BugSack data would be ideal)
 
 IS ADDON CURRENTLY SAFE TO USE : YES
-
+NOTE - As the addon is in it's TESTING phase it is updated pretty much daily but the test version number does not change.  You are recommended to always stay up to date with the version posted here which will always be the most stable version.
 
 Missing functionality I want to add/chage ASAP:
 1. (Done) Cap on weekly ontime, attendance
