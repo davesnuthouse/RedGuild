@@ -2,7 +2,7 @@ Addon is currently in prerelease so multiple errors are expected.
 
 Please report these under issues section (full BugSack data would be ideal)
 
-IS ADDON CURRENTLY SAFE TO USE : YES, but sync is still being worked on so wont function in all versions
+IS ADDON CURRENTLY SAFE TO USE : YES
 
 
 Missing functionality I want to add/chage ASAP:
@@ -51,7 +51,7 @@ Known Bugs:
 19. Delete functionality causes display issue on dkp table (data is fine)
 20. ML tools table needs to be 'reset' to show changes to dkp table
 21. DKP table headers cutoff?  (Rotation)
-22. Not a bug but need to change feral dps to a new icon as it's the same as feral tank
+22. (Done) Not a bug but need to change feral dps to a new icon as it's the same as feral tank
 
 
 Features to consider for the distant future:
