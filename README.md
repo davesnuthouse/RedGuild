@@ -27,7 +27,7 @@ Missing functionality I want to add/chage ASAP:
 20. Improve RL tools so you can manually select who to give points to?
 21. (Done) Update class/role icons to match the classes but still work on info
 22. Button on ML scoreboard for filter to raid
-23. Refine "Broadcast DKP" button to just people in the group/raid
+23. (Done) Refine "Broadcast DKP" button to just people in the group/raid
 
 
 Known Bugs:
@@ -55,6 +55,7 @@ Known Bugs:
 22. (Fixed) Not a bug but need to change feral dps to a new icon as it's the same as feral tank
 23. (Fixed) Missing from group goes off the window on Inviter
 24. (Fixed) Broadcast DKP broken
+25. The column sizes on ML Scorecard aren't quite right on MS/OS so they highlight in a way that gives me autistic tingles.
 
 
 Features to consider for the distant future:
