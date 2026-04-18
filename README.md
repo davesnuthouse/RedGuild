@@ -27,11 +27,12 @@ Missing functionality I want to add/chage ASAP:
 19. Improve EE use.
 20. Improve RL tools so you can manually select who to give points to?
 21. (Done) Update class/role icons to match the classes but still work on info
-22. Button on ML scoreboard for filter to raid
+22. (Done) Button on ML scoreboard for filter to raid
 23. (Done) Refine "Broadcast DKP" button to just people in the group/raid
 24. Master switch to turn SYNC off for testing
 25. Option on the Editor tab to set the DKP table version number
 26. Revisit audit log now that sync is working
+27. (Done) Option on the group builder to select all
 
 
 Known Bugs:
@@ -54,12 +55,12 @@ Known Bugs:
 17. (Fixed) Table not refreshing after Add
 18. Add button also needs clicked twice (once for defocus and once to activate)
 19. Delete functionality causes display issue on dkp table (data is fine)
-20. ML tools table needs to be 'reset' to show changes to dkp table
+20. (Fixed?) ML tools table needs to be 'reset' to show changes to dkp table
 21. DKP table headers cutoff?  (Rotation)
 22. (Fixed) Not a bug but need to change feral dps to a new icon as it's the same as feral tank
 23. (Fixed) Missing from group goes off the window on Inviter
 24. (Fixed) Broadcast DKP broken
-25. The column sizes on ML Scorecard aren't quite right on MS/OS so they highlight in a way that gives me autistic tingles.
+25. (Fixed) The column sizes on ML Scorecard aren't quite right on MS/OS so they highlight in a way that gives me autistic tingles.
 
 
 Features to consider for the distant future:
