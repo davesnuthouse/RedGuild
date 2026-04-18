@@ -2209,9 +2209,106 @@ end
     -- RL TOOLS PANEL
     --------------------------------------------------------------------
     do
+	
+	----------------------------------------------------------------
+-- RL TOOLS: TICKBOX LIST (LEFT HALF)
+----------------------------------------------------------------
+local RLSelected = RLSelected or {}
+
+local rlScroll = CreateFrame("ScrollFrame", nil, raidPanel, "UIPanelScrollFrameTemplate")
+rlScroll:SetPoint("TOPLEFT", raidPanel, "TOPLEFT", 50, -60)
+rlScroll:SetPoint("BOTTOMLEFT", raidPanel, "BOTTOMLEFT", 30, 30)
+rlScroll:SetWidth(raidPanel:GetWidth() * 0.40)
+
+local rlContent = CreateFrame("Frame", nil, rlScroll)
+rlContent:SetSize(1, 1)
+rlScroll:SetScrollChild(rlContent)
+
+local RL_ROW_HEIGHT = 20
+local RLRows = {}
+
+----------------------------------------------------------------
+-- RL ROW CREATION
+----------------------------------------------------------------
+local function CreateRLRow(i)
+    local row = CreateFrame("Frame", nil, rlContent)
+    row:SetSize(300, RL_ROW_HEIGHT)
+    row:SetPoint("TOPLEFT", 10, -(i - 1) * RL_ROW_HEIGHT)
+
+    local cb = CreateFrame("CheckButton", nil, row, "ChatConfigCheckButtonTemplate")
+    cb:SetPoint("LEFT", 0, 0)
+    cb:SetSize(20, 20)
+    row.checkbox = cb
+
+    local fs = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    fs:SetPoint("LEFT", cb, "RIGHT", 5, 0)
+    row.nameFS = fs
+
+    cb:SetScript("OnClick", function(self)
+        if row.name then
+            RLSelected[row.name] = self:GetChecked() or false
+        end
+    end)
+
+    return row
+end
+
+----------------------------------------------------------------
+-- RL LIST REFRESH
+----------------------------------------------------------------
+local function RefreshRLList()
+    for _, row in ipairs(RLRows) do
+        row:Hide()
+    end
+    wipe(RLRows)
+
+    local names = {}
+    for name in pairs(RedGuild_Data) do
+        table.insert(names, name)
+    end
+    table.sort(names)
+
+    local i = 0
+    for _, name in ipairs(names) do
+        local d = RedGuild_Data[name]
+        if d then
+            i = i + 1
+            local row = RLRows[i]
+
+            if not row then
+                row = CreateRLRow(i)
+                RLRows[i] = row
+            end
+
+            row.name = name
+
+            local class = d.class
+            local c = RAID_CLASS_COLORS[class]
+            local hex = "|cffffffff"
+            if c then
+                hex = string.format("|cff%02x%02x%02x", c.r*255, c.g*255, c.b*255)
+            end
+
+            row.nameFS:SetText(hex .. name .. "|r")
+            row.checkbox:SetChecked(RLSelected[name] or false)
+
+            row:Show()
+        end
+    end
+
+    rlContent:SetHeight(i * RL_ROW_HEIGHT)
+end
+
+----------------------------------------------------------------
+-- RL PANEL SHOW/HIDE
+----------------------------------------------------------------
+raidPanel:SetScript("OnShow", function()
+    RefreshRLList()
+end)
+	
     local onTimeBtn = CreateFrame("Button", nil, raidPanel, "UIPanelButtonTemplate")
     onTimeBtn:SetSize(200, 30)
-    onTimeBtn:SetPoint("TOP", raidPanel, "TOP", 0, -40)
+    onTimeBtn:SetPoint("TOPRIGHT", raidPanel, "TOPRIGHT", -100, -60)
     onTimeBtn:SetText("Allocate On Time DKP")
     onTimeBtn:SetScript("OnClick", function()
         if not IsAuthorized() then
@@ -2247,44 +2344,42 @@ end
     benchBtn:SetSize(200, 30)
     benchBtn:SetPoint("TOP", attendanceBtn, "BOTTOM", 0, -20)
     benchBtn:SetText("Allocate Bench")
-    benchBtn:SetScript("OnClick", function()
-        if not IsAuthorized() then
-            Print("Only an editor can perform this function.")
-            return
-        end
+benchBtn:SetScript("OnClick", function()
+    if not IsAuthorized() then
+        Print("Only an editor can perform this function.")
+        return
+    end
 
-        if not IsInRaid() then
-            Print("You must be in a raid to allocate bench DKP this way.")
-            return
-        end
+    local function ApplyBench()
+        for _, row in ipairs(RLRows) do
+            if row:IsShown() and row.checkbox:GetChecked() then
+                local name = row.name
+                local d = RedGuild_Data[name]
 
-        local function ApplyBench()
-            for i = 1, GetNumGroupMembers() do
-                local name, _, _, _, _, _, _, online = GetRaidRosterInfo(i)
-                if name then
-                    local short = Ambiguate(name, "short")
-                    local d = RedGuild_Data[short]
-                    if d then
-                        local old = tonumber(d.attendance or 0) or 0
-                        local new = old + 15
-                        if new > 30 then new = 30 end
-                        if new ~= old then
-                            d.attendance = new
-                            LogAudit(short, "attendance", old, new)
-                        end
+                if d then
+                    local old = tonumber(d.attendance or 0) or 0
+                    local new = old + 15
+                    if new > 30 then new = 30 end
+
+                    if new ~= old then
+                        d.attendance = new
+                        LogAudit(name, "attendance", old, new)
                     end
                 end
             end
-            UpdateTable()
-            Print("Bench DKP allocated to raid members (up to a maximum of 30).")
         end
 
-        ApplyBench()
-    end)
+		BumpDKPVersion()
+        UpdateTable()
+        Print("Bench DKP allocated to selected players (up to a maximum of 30).")
+    end
+
+    ApplyBench()
+end)
 
     local newWeekBtn = CreateFrame("Button", nil, raidPanel, "UIPanelButtonTemplate")
     newWeekBtn:SetSize(200, 30)
-    newWeekBtn:SetPoint("BOTTOM", raidPanel, "BOTTOM", 0, 10)
+    newWeekBtn:SetPoint("BOTTOMRIGHT", raidPanel, "BOTTOMRIGHT", -100, 20)
     newWeekBtn:SetText("Start a New DKP Week")
     newWeekBtn:SetScript("OnClick", function()
         if not IsAuthorized() then
@@ -2491,6 +2586,45 @@ end)
     end	
 			
         end)
+
+----------------------------------------------------------------
+-- DKP VERSION EDIT BOX
+----------------------------------------------------------------
+local versionLabel = editorsPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+versionLabel:SetPoint("BOTTOMRIGHT", editorsPanel, "BOTTOMRIGHT", -100, 20)
+versionLabel:SetText("DKP Table Version:")
+
+local versionEdit = CreateFrame("EditBox", nil, editorsPanel, "InputBoxTemplate")
+versionEdit:SetAutoFocus(false)
+versionEdit:SetSize(60, 20)
+versionEdit:SetPoint("LEFT", versionLabel, "RIGHT", 10, 0)
+
+-- Load current version when panel is shown
+editorsPanel:HookScript("OnShow", function()
+    versionEdit:SetText(tostring(RedGuild_Config.dkpVersion or 0))
+end)
+
+-- Save on Enter
+versionEdit:SetScript("OnEnterPressed", function(self)
+    local newVal = tonumber(self:GetText())
+    if newVal then
+        RedGuild_Config.dkpVersion = newVal
+        Print("|cff00ff00DKP version updated to " .. newVal .. ".|r")
+        UpdateTable()
+    else
+        Print("|cffff5555Invalid version number.|r")
+    end
+    self:ClearFocus()
+end)
+
+-- Save on focus lost
+versionEdit:SetScript("OnEditFocusLost", function(self)
+    local newVal = tonumber(self:GetText())
+    if newVal then
+        RedGuild_Config.dkpVersion = newVal
+        UpdateTable()
+    end
+end)
 
         local note = editorsPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
         note:SetPoint("BOTTOMLEFT", editorsPanel, "BOTTOMLEFT", 10, 10)
@@ -3513,31 +3647,33 @@ StaticPopupDialogs["REDGUILD_FORCE_SYNC_RECEIVE"] = {
 }
 
 StaticPopupDialogs["REDGUILD_ON_TIME_CHECK"] = {
-    text = "Allocate On-Time DKP to all raid members?",
+    text = "Allocate On-Time DKP to selected players?",
     button1 = "Yes",
     button2 = "No",
     OnAccept = function()
         if not IsRaidLeaderOrMasterLooter() then return end
-        for i = 1, GetNumGroupMembers() do
-            local name = GetRaidRosterInfo(i)
-            if name then
-                name = Ambiguate(name, "short")
+
+        for _, row in ipairs(RLRows) do
+            if row:IsShown() and row.checkbox:GetChecked() then
+                local name = row.name
                 local d = EnsurePlayer(name)
+
                 local old = d.onTime or 0
                 local new = old + 5
-				if new > 10 then
-					new = 10
-					Print("|cffff5555On-Time DKP cannot exceed 10 in a single DKP week. Value capped.|r")
-				end
+                if new > 10 then
+                    new = 10
+                    Print("|cffff5555On-Time DKP cannot exceed 10 in a single DKP week. Value capped.|r")
+                end
 
-				d.onTime = new
+                d.onTime = new
                 RecalcBalance(d)
                 LogAudit(name, "onTime", old, d.onTime)
             end
         end
-		BumpDKPVersion()
+
+        BumpDKPVersion()
         UpdateTable()
-        Print("On-Time DKP allocated.")
+        Print("On-Time DKP allocated to selected players.")
     end,
     timeout = 0,
     whileDead = true,
@@ -3545,31 +3681,33 @@ StaticPopupDialogs["REDGUILD_ON_TIME_CHECK"] = {
 }
 
 StaticPopupDialogs["REDGUILD_ALLOCATE_ATTENDANCE"] = {
-    text = "Allocate Attendance DKP to all raid members?",
+    text = "Allocate Attendance DKP to selected players?",
     button1 = "Yes",
     button2 = "No",
     OnAccept = function()
         if not IsRaidLeaderOrMasterLooter() then return end
-        for i = 1, GetNumGroupMembers() do
-            local name = GetRaidRosterInfo(i)
-            if name then
-                name = Ambiguate(name, "short")
+
+        for _, row in ipairs(RLRows) do
+            if row:IsShown() and row.checkbox:GetChecked() then
+                local name = row.name
                 local d = EnsurePlayer(name)
+
                 local old = d.attendance or 0
                 local new = old + 15
-				if new > 30 then
-					new = 30
-					Print("|cffff5555Attendance DKP cannot exceed 30 in a single DKP week. Value capped.|r")
-				end
+                if new > 30 then
+                    new = 30
+                    Print("|cffff5555Attendance DKP cannot exceed 30 in a single DKP week. Value capped.|r")
+                end
 
-				d.attendance = new
+                d.attendance = new
                 RecalcBalance(d)
                 LogAudit(name, "attendance", old, d.attendance)
             end
         end
+
         BumpDKPVersion()
-		UpdateTable()
-        Print("Attendance DKP allocated.")
+        UpdateTable()
+        Print("Attendance DKP allocated to selected players.")
     end,
     timeout = 0,
     whileDead = true,
