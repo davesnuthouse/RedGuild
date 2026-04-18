@@ -1328,6 +1328,12 @@ local function CreateUI()
 	CreateTab(TAB_GROUP, "Inviter")
 	CreateTab(TAB_ML, "ML Scorecard")
 	
+-- Force refresh when switching to ML tab
+-- Force refresh when switching to ML tab
+tabs[TAB_ML]:HookScript("OnClick", function()
+    C_Timer.After(0.05, RefreshMLTools)
+end)
+	
 	if IsEditor(UnitName("player")) then
     CreateTab(TAB_RAID, "RL Tools")
     CreateTab(TAB_EDITORS, "Editors")
@@ -1361,49 +1367,51 @@ local function CreateUI()
 --------------------------------------------------------------------
 -- GROUP BUILDER PANEL
 --------------------------------------------------------------------
-    selectedState = selectedState or {}
+selectedState = selectedState or {}
 do
+    ------------------------------------------------------------
+    -- TITLE
+    ------------------------------------------------------------
     local title = groupPanel:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
     title:SetPoint("TOPLEFT", 30, -30)
     title:SetText("")
 
-------------------------------------------------------------
--- LEFT SIDE: SCROLL LIST (HALF WIDTH)
-------------------------------------------------------------
-local scroll = CreateFrame("ScrollFrame", nil, groupPanel, "UIPanelScrollFrameTemplate")
-scroll:SetPoint("TOPLEFT", groupPanel, "TOPLEFT", 30, -60)
-scroll:SetPoint("BOTTOMLEFT", groupPanel, "BOTTOMLEFT", 30, 50)
-scroll:SetWidth(groupPanel:GetWidth() * 0.40)
+    ------------------------------------------------------------
+    -- LEFT SIDE: SCROLL LIST (HALF WIDTH)
+    ------------------------------------------------------------
+    local scroll = CreateFrame("ScrollFrame", nil, groupPanel, "UIPanelScrollFrameTemplate")
+    scroll:SetPoint("TOPLEFT", groupPanel, "TOPLEFT", 30, -60)
+    scroll:SetPoint("BOTTOMLEFT", groupPanel, "BOTTOMLEFT", 30, 50)
+    scroll:SetWidth(groupPanel:GetWidth() * 0.40)
 
-local content = CreateFrame("Frame", nil, scroll)
-content:SetSize(1, 1)
-scroll:SetScrollChild(content)
+    local content = CreateFrame("Frame", nil, scroll)
+    content:SetSize(1, 1)
+    scroll:SetScrollChild(content)
 
-local ROW_HEIGHT = 20
-groupRows = {}
+    local ROW_HEIGHT = 20
+    groupRows = {}
 
+    ------------------------------------------------------------
+    -- RIGHT SIDE: INFO BOX
+    ------------------------------------------------------------
+    local infoBox = CreateFrame("Frame", nil, groupPanel, "BackdropTemplate")
+    infoBox:SetPoint("TOPRIGHT", groupPanel, "TOPRIGHT", -30, -60)
+    infoBox:SetPoint("BOTTOMRIGHT", groupPanel, "BOTTOMRIGHT", -30, 50)
+    infoBox:SetWidth(groupPanel:GetWidth() * 0.45)
 
-------------------------------------------------------------
--- RIGHT SIDE: INFO BOX (INDEPENDENT)
-------------------------------------------------------------
-local infoBox = CreateFrame("Frame", nil, groupPanel, "BackdropTemplate")
-infoBox:SetPoint("TOPRIGHT", groupPanel, "TOPRIGHT", -30, -60)
-infoBox:SetPoint("BOTTOMRIGHT", groupPanel, "BOTTOMRIGHT", -30, 50)
-infoBox:SetWidth(groupPanel:GetWidth() * 0.45)
+    infoBox:SetBackdrop({
+        bgFile = "Interface/Tooltips/UI-Tooltip-Background",
+        edgeFile = "Interface/Tooltips/UI-Tooltip-Border",
+        tile = true, tileSize = 16, edgeSize = 12,
+        insets = { left = 3, right = 3, top = 3, bottom = 3 }
+    })
+    infoBox:SetBackdropColor(0, 0, 0, 0.6)
 
-infoBox:SetBackdrop({
-    bgFile = "Interface/Tooltips/UI-Tooltip-Background",
-    edgeFile = "Interface/Tooltips/UI-Tooltip-Border",
-    tile = true, tileSize = 16, edgeSize = 12,
-    insets = { left = 3, right = 3, top = 3, bottom = 3 }
-})
-infoBox:SetBackdropColor(0, 0, 0, 0.6)
-
-local infoText = infoBox:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-infoText:SetPoint("TOPLEFT", 10, -10)
-infoText:SetJustifyH("LEFT")
-infoText:SetWidth(infoBox:GetWidth() - 20)
-infoText:SetText("No players selected.")
+    local infoText = infoBox:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    infoText:SetPoint("TOPLEFT", 10, -10)
+    infoText:SetJustifyH("LEFT")
+    infoText:SetWidth(infoBox:GetWidth() - 20)
+    infoText:SetText("No players selected.")
 
     ------------------------------------------------------------
     -- CLASS COLOUR LOOKUP
@@ -1422,10 +1430,10 @@ infoText:SetText("No players selected.")
         local roleCounts = {
             tank = 0,
             melee = 0,
-			ranged = 0,
+            ranged = 0,
             caster = 0,
             healer = 0,
-			unknown = 0,
+            unknown = 0,
         }
 
         for _, row in ipairs(groupRows) do
@@ -1433,39 +1441,26 @@ infoText:SetText("No players selected.")
                 table.insert(selected, row.name)
 
                 local class = RedGuild_Data[row.name].class
-				classCounts[class] = (classCounts[class] or 0) + 1
+                classCounts[class] = (classCounts[class] or 0) + 1
 
--- MAIN SPEC → ROLE ONLY
-local spec = RedGuild_Data[row.name].msRole
-local role = SPEC_ROLES[spec]
+                local spec = RedGuild_Data[row.name].msRole
+                local role = SPEC_ROLES[spec]
 
-if role == "tank" then
-    roleCounts.tank = roleCounts.tank + 1
-
-elseif role == "melee" then
-    roleCounts.melee = roleCounts.melee + 1
-
-elseif role == "ranged" then
-    roleCounts.ranged = roleCounts.ranged + 1
-
-elseif role == "caster" then
-    roleCounts.caster = roleCounts.caster + 1
-
-elseif role == "healer" then
-    roleCounts.healer = roleCounts.healer + 1
-
-else
-    roleCounts.unknown = roleCounts.unknown + 1
-end
+                if role == "tank" then roleCounts.tank = roleCounts.tank + 1
+                elseif role == "melee" then roleCounts.melee = roleCounts.melee + 1
+                elseif role == "ranged" then roleCounts.ranged = roleCounts.ranged + 1
+                elseif role == "caster" then roleCounts.caster = roleCounts.caster + 1
+                elseif role == "healer" then roleCounts.healer = roleCounts.healer + 1
+                else roleCounts.unknown = roleCounts.unknown + 1 end
             end
         end
 
         local lines = {}
 
         table.insert(lines, string.format("Selected: |cffffff00%d|r", #selected))
-
         table.insert(lines, "")
         table.insert(lines, "Classes:")
+
         for class, count in pairs(classCounts) do
             local c = RAID_CLASS_COLORS[class]
             if c then
@@ -1480,140 +1475,149 @@ end
         table.insert(lines, "Roles:")
         table.insert(lines, string.format("  Tanks: %d", roleCounts.tank))
         table.insert(lines, string.format("  Melee DPS: %d", roleCounts.melee))
-		table.insert(lines, string.format("  Ranged DPS: %d", roleCounts.ranged))
+        table.insert(lines, string.format("  Ranged DPS: %d", roleCounts.ranged))
         table.insert(lines, string.format("  Caster DPS: %d", roleCounts.caster))
         table.insert(lines, string.format("  Healers: %d", roleCounts.healer))
-		table.insert(lines, string.format("  Unknown: %d", roleCounts.unknown))
+        table.insert(lines, string.format("  Unknown: %d", roleCounts.unknown))
 
-		------------------------------------------------------------
-		-- GROUP MEMBERSHIP CHECK
-		------------------------------------------------------------
-		local groupMembers = {}
+        ------------------------------------------------------------
+        -- GROUP MEMBERSHIP CHECK
+        ------------------------------------------------------------
+        local groupMembers = {}
 
-		if IsInRaid() then
-			for i = 1, GetNumGroupMembers() do
-				local name = UnitName("raid"..i)
-				if name then
-					groupMembers[name] = true
-				end
-			end
-		elseif IsInGroup() then
-			for i = 1, GetNumSubgroupMembers() do
-				local name = UnitName("party"..i)
-				if name then
-					groupMembers[name] = true
-				end
-			end
-			-- Player themselves
-			groupMembers[UnitName("player")] = true
-		end
+        if IsInRaid() then
+            for i = 1, GetNumGroupMembers() do
+                local name = UnitName("raid"..i)
+                if name then groupMembers[name] = true end
+            end
+        elseif IsInGroup() then
+            for i = 1, GetNumSubgroupMembers() do
+                local name = UnitName("party"..i)
+                if name then groupMembers[name] = true end
+            end
+            groupMembers[UnitName("player")] = true
+        end
 
-		local missing = {}
-		for _, name in ipairs(selected) do
-			if not groupMembers[name] then
-				table.insert(missing, name)
-			end
-		end
+        local missing = {}
+        for _, name in ipairs(selected) do
+            if not groupMembers[name] then
+                table.insert(missing, name)
+            end
+        end
 
-		table.insert(lines, "")
-		table.insert(lines, string.format("In your group: |cffffff00%d|r", GetNumGroupMembers()))
-		table.insert(lines, "Missing from group:")
+        table.insert(lines, "")
+        table.insert(lines, string.format("In your group: |cffffff00%d|r", GetNumGroupMembers()))
+        table.insert(lines, "Missing from group:")
 
-		if #missing == 0 then
-			table.insert(lines, "  |cff00ff00None|r")
-		else
-			local row = {}
-			for i, name in ipairs(missing) do
-				table.insert(row, "|cffff3333" .. name .. "|r")
-
-				-- Every 5 names, flush the row
-			if (#row == 5) then
-				table.insert(lines, "  " .. table.concat(row, ", "))
-				row = {}
-			end
-		end
-
-    -- Flush any remaining names
-    if #row > 0 then
-        table.insert(lines, "  " .. table.concat(row, ", "))
-    end
-end
+        if #missing == 0 then
+            table.insert(lines, "  |cff00ff00None|r")
+        else
+            local row = {}
+            for i, name in ipairs(missing) do
+                table.insert(row, "|cffff3333" .. name .. "|r")
+                if #row == 5 then
+                    table.insert(lines, "  " .. table.concat(row, ", "))
+                    row = {}
+                end
+            end
+            if #row > 0 then
+                table.insert(lines, "  " .. table.concat(row, ", "))
+            end
+        end
 
         infoText:SetText(table.concat(lines, "\n"))
-		infoText:SetText(infoText:GetText() .. "\n\n|cffff3333Roles counted are MAIN spec only.|r")
+        infoText:SetText(infoText:GetText() .. "\n\n|cffff3333Roles counted are MAIN spec only.|r")
     end
 
-------------------------------------------------------------
--- REFRESH LIST 
-------------------------------------------------------------
-local function RefreshGroupBuilder()
-    for _, row in ipairs(groupRows) do
-        row:Hide()
-    end
-    wipe(groupRows)
+    ------------------------------------------------------------
+    -- SELECT ALL / DESELECT ALL CHECKBOX
+    ------------------------------------------------------------
+    local selectAllChk = CreateFrame("CheckButton", nil, groupPanel, "ChatConfigCheckButtonTemplate")
+    selectAllChk:SetPoint("TOPLEFT", groupPanel, "TOPLEFT", 70, -35)
+    selectAllChk:SetSize(18, 18)
 
-    local names = {}
-    for name in pairs(RedGuild_Data) do
-        table.insert(names, name)
-    end
-    table.sort(names)
+    local selectAllLabel = groupPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    selectAllLabel:SetPoint("LEFT", selectAllChk, "RIGHT", 4, 0)
+    selectAllLabel:SetText("Select/Deselect all")
 
-    local i = 0
-    for _, name in ipairs(names) do
+    selectAllChk:SetScript("OnClick", function(self)
+        local checked = self:GetChecked()
 
-        --------------------------------------------------------
-        -- SKIP INVALID DKP ENTRIES
-        --------------------------------------------------------
-        local isInvalid = RuntimeInvalid(name)
-		if not isInvalid then
-
-            i = i + 1
-            local row = groupRows[i]
-
-            if not row then
-                row = CreateFrame("Frame", nil, content)
-                row:SetSize(300, ROW_HEIGHT)
-
-                local cb = CreateFrame("CheckButton", nil, row, "ChatConfigCheckButtonTemplate")
-                cb:SetPoint("LEFT", 0, 0)
-                cb:SetSize(20, 20)
-                row.checkbox = cb
-
-                local fs = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-                fs:SetPoint("LEFT", cb, "RIGHT", 5, 0)
-                row.nameFS = fs
-
-                cb:SetScript("OnClick", function(self)
-                    if row.name then
-                        selectedState[row.name] = self:GetChecked() or false
-                    end
-                    UpdateGroupBuilderInfo()
-                end)
-
-                groupRows[i] = row
+        for _, row in ipairs(groupRows) do
+            if row:IsShown() then
+                row.checkbox:SetChecked(checked)
+                selectedState[row.name] = checked
             end
-
-            row:SetPoint("TOPLEFT", 10, -(i - 1) * ROW_HEIGHT)
-            row.name = name
-
-            local class = RedGuild_Data[name].class
-            local colour = CLASS_COLORS[class] or "|cffffffff"
-
-            local online = IsPlayerOnline(name)
-            local offlineText = online and "" or " |cffaaaaaa(offline)|r"
-
-            row.nameFS:SetText(colour .. name .. "|r" .. offlineText)
-
-            -- Restore previous selection state (default false)
-            row.checkbox:SetChecked(selectedState[name] or false)
-
-            row:Show()
         end
-    end
 
-    content:SetHeight(i * ROW_HEIGHT)
-    UpdateGroupBuilderInfo()
-end
+        UpdateGroupBuilderInfo()
+    end)
+
+    ------------------------------------------------------------
+    -- REFRESH LIST
+    ------------------------------------------------------------
+    local function RefreshGroupBuilder()
+        for _, row in ipairs(groupRows) do
+            row:Hide()
+        end
+        wipe(groupRows)
+
+        local names = {}
+        for name in pairs(RedGuild_Data) do
+            table.insert(names, name)
+        end
+        table.sort(names)
+
+        local i = 0
+        for _, name in ipairs(names) do
+            local isInvalid = RuntimeInvalid(name)
+            if not isInvalid then
+                i = i + 1
+                local row = groupRows[i]
+
+                if not row then
+                    row = CreateFrame("Frame", nil, content)
+                    row:SetSize(300, ROW_HEIGHT)
+
+                    local cb = CreateFrame("CheckButton", nil, row, "ChatConfigCheckButtonTemplate")
+                    cb:SetPoint("LEFT", 0, 0)
+                    cb:SetSize(20, 20)
+                    row.checkbox = cb
+
+                    local fs = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+                    fs:SetPoint("LEFT", cb, "RIGHT", 5, 0)
+                    row.nameFS = fs
+
+                    cb:SetScript("OnClick", function(self)
+                        if row.name then
+                            selectedState[row.name] = self:GetChecked() or false
+                        end
+                        UpdateGroupBuilderInfo()
+                    end)
+
+                    groupRows[i] = row
+                end
+
+                row:SetPoint("TOPLEFT", 10, -(i - 1) * ROW_HEIGHT)
+                row.name = name
+
+                local class = RedGuild_Data[name].class
+                local colour = CLASS_COLORS[class] or "|cffffffff"
+
+                local online = IsPlayerOnline(name)
+                local offlineText = online and "" or " |cffaaaaaa(offline)|r"
+
+                row.nameFS:SetText(colour .. name .. "|r" .. offlineText)
+
+                row.checkbox:SetChecked(selectedState[name] or false)
+
+                row:Show()
+            end
+        end
+
+        content:SetHeight(i * ROW_HEIGHT)
+        UpdateGroupBuilderInfo()
+    end
 
     ------------------------------------------------------------
     -- 10-SECOND ONLINE SCAN
@@ -1624,12 +1628,14 @@ end
             scanTicker = C_Timer.NewTicker(10, RefreshGroupBuilder)
         end
     end
+
     local function StopOnlineScan()
         if scanTicker then
             scanTicker:Cancel()
             scanTicker = nil
         end
     end
+
 
     ------------------------------------------------------------
     -- INVITE BUTTON (NO AUTO-UNTICK)
@@ -1698,6 +1704,7 @@ end
 -- ML TOOLS PANEL
 --------------------------------------------------------------------
 do
+	local mlShowGroupOnly = false
     ----------------------------------------------------------------
     -- COLUMN HEADERS
     ----------------------------------------------------------------
@@ -1707,9 +1714,9 @@ do
 
     local headers = {
         { text = "Name",  width = 170 },
-        { text = "Main Spec",  width = 97  },
-        { text = "Off Spec",   width = 79  },
-        { text = "Notes", width = 260 },
+        { text = "Main Spec",  width = 99  },
+        { text = "Off Spec",   width = 90  },
+        { text = "Notes", width = 200 },
     }
 
     local x = 0
@@ -1744,7 +1751,7 @@ mlRows = {}
 ----------------------------------------------------------------
 -- INLINE EDIT FOR NOTES
 ----------------------------------------------------------------
-inlineEditML = CreateFrame("EditBox", nil, UIParent, "InputBoxTemplate")
+inlineEditML = CreateFrame("EditBox", nil, content, "InputBoxTemplate")
 inlineEditML:SetAutoFocus(false)
 inlineEditML:SetSize(200, 18)
 inlineEditML:Hide()
@@ -1785,9 +1792,9 @@ function CreateMLRow(i)
     row.cols = {}
 
     local widths = {
-        [COL_NAME]  = 150,
-        [COL_MAIN]  = 55,
-        [COL_OFF]   = 140,
+        [COL_NAME]  = 170,
+        [COL_MAIN]  = 100,
+        [COL_OFF]   = 90,
         [COL_NOTES] = 300,
     }
 
@@ -1806,12 +1813,18 @@ function CreateMLRow(i)
             btn:SetSize(widths[col], ROW_HEIGHT)
 
             local fs = btn:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-            fs:SetAllPoints()
-            fs:SetJustifyH("CENTER")
-            btn:SetFontString(fs)
+            fs:ClearAllPoints()
+			fs:SetPoint("LEFT", btn, "LEFT", 2, 0)
+			fs:SetWidth(widths[col] - 4)
+			fs:SetJustifyH("LEFT")
+			btn:SetFontString(fs)
 
             btn:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
-            btn:GetHighlightTexture():SetAlpha(0.3)
+			local hl = btn:GetHighlightTexture()
+			hl:ClearAllPoints()
+			hl:SetPoint("LEFT", btn, "LEFT", 0, 0)
+			hl:SetPoint("RIGHT", btn, "LEFT", widths[col], 0)
+			hl:SetAlpha(0.3)
 
             row.cols[col] = btn
 
@@ -1821,12 +1834,18 @@ function CreateMLRow(i)
             btn:SetSize(widths[col], ROW_HEIGHT)
 
             local fs = btn:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-            fs:SetAllPoints()
-            fs:SetJustifyH("LEFT")
-            btn:SetFontString(fs)
+            fs:ClearAllPoints()
+			fs:SetPoint("LEFT", btn, "LEFT", 2, 0)
+			fs:SetWidth(widths[col] - 4)
+			fs:SetJustifyH("LEFT")
+			btn:SetFontString(fs)
 
             btn:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
-            btn:GetHighlightTexture():SetAlpha(0.3)
+			local hl = btn:GetHighlightTexture()
+			hl:ClearAllPoints()
+			hl:SetPoint("LEFT", btn, "LEFT", 0, 0)
+			hl:SetPoint("RIGHT", btn, "LEFT", widths[col], 0)
+			hl:SetAlpha(0.3)
 
             row.cols[col] = btn
         end
@@ -1878,13 +1897,61 @@ function RefreshMLTools()
         end
     end
 
-    ----------------------------------------------------------------
-    -- RENDER ROWS
-    ----------------------------------------------------------------
-    local i = 0
-    for _, name in ipairs(names) do
-        local d = RedGuild_Data[name]
-        if d and IsNameInGuild(name) then
+----------------------------------------------------------------
+-- RENDER ROWS
+----------------------------------------------------------------
+local i = 0
+for _, name in ipairs(names) do
+    local d = RedGuild_Data[name]
+
+    ------------------------------------------------------------
+    -- VALID DKP ENTRY CHECK
+    ------------------------------------------------------------
+    if d and IsNameInGuild(name) then
+
+        ------------------------------------------------------------
+        -- DETERMINE IF THIS ROW SHOULD BE RENDERED
+        ------------------------------------------------------------
+        local shouldRender = true
+
+        if mlShowGroupOnly then
+            shouldRender = false
+
+            -- RAID CHECK
+            if IsInRaid() then
+                for idx = 1, GetNumGroupMembers() do
+                    local rName = UnitName("raid"..idx)
+                    if rName and Ambiguate(rName, "short") == name then
+                        shouldRender = true
+                        break
+                    end
+                end
+
+            -- PARTY CHECK
+            elseif IsInGroup() then
+                for idx = 1, GetNumSubgroupMembers() do
+                    local pName = UnitName("party"..idx)
+                    if pName and Ambiguate(pName, "short") == name then
+                        shouldRender = true
+                        break
+                    end
+                end
+
+                -- Include yourself
+                if Ambiguate(UnitName("player"), "short") == name then
+                    shouldRender = true
+                end
+            end
+        end
+
+        ------------------------------------------------------------
+        -- SKIP ROW IF FILTERED OUT
+        ------------------------------------------------------------
+        if shouldRender then
+
+            --------------------------------------------------------
+            -- RENDER THIS ROW
+            --------------------------------------------------------
             i = i + 1
             local row = mlRows[i]
             if not row then break end
@@ -1893,123 +1960,140 @@ function RefreshMLTools()
 
             local mlData = EnsureML(name)
 
+            --------------------------------------------------------
+            -- COLUMN REFERENCES
+            --------------------------------------------------------
             local nameFS   = row.cols[COL_NAME]
             local mainBtn  = row.cols[COL_MAIN]
             local offBtn   = row.cols[COL_OFF]
             local notesBtn = row.cols[COL_NOTES]
 
-            ----------------------------------------------------
-            -- NAME COLUMN
-            ----------------------------------------------------
+            --------------------------------------------------------
+            -- NAME COLUMN (CLASS COLOURED)
+            --------------------------------------------------------
             local class = d.class
             local color = RAID_CLASS_COLORS[class]
             local hex = "|cffffffff"
+
             if color then
                 hex = string.format("|cff%02x%02x%02x",
-                    color.r*255, color.g*255, color.b*255)
+                    color.r * 255,
+                    color.g * 255,
+                    color.b * 255
+                )
             end
+
             nameFS:SetText(hex .. name .. "|r")
 
-            ----------------------------------------------------
+            --------------------------------------------------------
             -- MAIN / OFFSPEC VALUES
-            ----------------------------------------------------
+            --------------------------------------------------------
             mainBtn:SetText(tostring(mlData.mlMain or 0))
             offBtn:SetText(tostring(mlData.mlOff or 0))
             notesBtn:SetText(mlData.mlNotes or "")
 
-            -- MAIN CLICK
+            --------------------------------------------------------
+            -- MAIN CLICK HANDLER
+            --------------------------------------------------------
             mainBtn:SetScript("OnMouseDown", function(self, button)
                 local rowFrame = self:GetParent()
                 local thisName = rowFrame and rowFrame.name
                 if not thisName then return end
 
                 local ml = EnsureML(thisName)
+
                 if button == "LeftButton" then
                     ml.mlMain = (ml.mlMain or 0) + 1
                 elseif button == "RightButton" then
                     ml.mlMain = math.max(0, (ml.mlMain or 0) - 1)
                 end
+
                 RefreshMLTools()
             end)
 
--- OFF CLICK
-offBtn:SetScript("OnMouseDown", function(self, button)
-    local rowFrame = self:GetParent()
-    local thisName = rowFrame and rowFrame.name
-    if not thisName then return end
+            --------------------------------------------------------
+            -- OFFSPEC CLICK HANDLER
+            --------------------------------------------------------
+            offBtn:SetScript("OnMouseDown", function(self, button)
+                local rowFrame = self:GetParent()
+                local thisName = rowFrame and rowFrame.name
+                if not thisName then return end
 
-    local ml = EnsureML(thisName)
-    if button == "LeftButton" then
-        ml.mlOff = (ml.mlOff or 0) + 1
-    elseif button == "RightButton" then
-        ml.mlOff = math.max(0, (ml.mlOff or 0) - 1)
-    end
-    RefreshMLTools()
-end)
+                local ml = EnsureML(thisName)
 
--- NOTES CLICK → INLINE EDIT
-notesBtn:SetScript("OnMouseDown", function(self, button)
-    if button ~= "LeftButton" then return end
+                if button == "LeftButton" then
+                    ml.mlOff = (ml.mlOff or 0) + 1
+                elseif button == "RightButton" then
+                    ml.mlOff = math.max(0, (ml.mlOff or 0) - 1)
+                end
 
-    -- Commit any previous edit before starting a new one
-    CommitInlineML()
+                RefreshMLTools()
+            end)
 
-    local rowFrame = self:GetParent()
-    local thisName = rowFrame and rowFrame.name
-    if not thisName then return end
+            --------------------------------------------------------
+            -- NOTES CLICK → INLINE EDIT
+            --------------------------------------------------------
+            notesBtn:SetScript("OnMouseDown", function(self, button)
+                if button ~= "LeftButton" then return end
 
-    local ml = EnsureML(thisName)
-    local fs = self:GetFontString()
-    if not fs then return end
+                -- Commit any previous edit
+                CommitInlineML()
 
-    fs:Hide()
+                local rowFrame = self:GetParent()
+                local thisName = rowFrame and rowFrame.name
+                if not thisName then return end
 
-    inlineEditML:ClearAllPoints()
-    inlineEditML:SetPoint("LEFT", self, "LEFT", 0, 0)
-    inlineEditML:SetWidth(self:GetWidth() - 4)
-    inlineEditML:SetText(ml.mlNotes or "")
-    inlineEditML:HighlightText()
-    inlineEditML:SetFocus()
+                local ml = EnsureML(thisName)
+                local fs = self:GetFontString()
+                if not fs then return end
 
-    inlineEditML.currentFS = fs
-	inlineEditML.cancelled = false
+                fs:Hide()
 
-	-- ⭐ SET SAVEFUNC BEFORE FOCUS ⭐
-	inlineEditML.saveFunc = function(text)
-		ml.mlNotes = text or ""
-		fs:SetText(ml.mlNotes)
-		fs:Show()
-		inlineEditML.currentFS = nil
-	end
+                inlineEditML:ClearAllPoints()
+                inlineEditML:SetPoint("LEFT", self, "LEFT", 0, 0)
+                inlineEditML:SetWidth(self:GetWidth() - 4)
+                inlineEditML:SetText(ml.mlNotes or "")
+                inlineEditML:HighlightText()
+                inlineEditML:SetFocus()
 
-	inlineEditML:SetText(ml.mlNotes or "")
-	inlineEditML:HighlightText()
+                inlineEditML.currentFS = fs
+                inlineEditML.cancelled = false
 
-	inlineEditML:Show()
-	inlineEditML:SetFocus()   -- focus AFTER saveFunc is assigned
-	end)
+                inlineEditML.saveFunc = function(text)
+                    ml.mlNotes = text or ""
+                    fs:SetText(ml.mlNotes)
+                    fs:Show()
+                    inlineEditML.currentFS = nil
+                end
+
+                inlineEditML:Show()
+                inlineEditML:SetFocus()
+            end)
 
             row:Show()
         end
     end
+end
 
-    -- Hide unused rows
-    for j = i + 1, #mlRows do
-        local row = mlRows[j]
-        if row then
-            row.name = nil
-            row:Hide()
-        end
+----------------------------------------------------------------
+-- HIDE UNUSED ROWS
+----------------------------------------------------------------
+for j = i + 1, #mlRows do
+    local row = mlRows[j]
+    if row then
+        row.name = nil
+        row:Hide()
     end
+end
 end
 
     ----------------------------------------------------------------
     -- BOTTOM WARNING
     ----------------------------------------------------------------
     local note = mlPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    note:SetPoint("BOTTOMLEFT", mlPanel, "BOTTOMLEFT", 10, 10)
+    note:SetPoint("BOTTOMLEFT", mlPanel, "BOTTOMLEFT", 20, 10)
     note:SetJustifyH("LEFT")
-    note:SetText("|cffaaaaaaPlease note the broadcast (to raid) button only work if you are a raid assistant.|r")
+    note:SetText("|cffaaaaaaBroadcast (to raid) button only works if you are a RL or RA.|r")
 
     ----------------------------------------------------------------
     -- BROADCAST DKP BUTTON
@@ -2064,6 +2148,25 @@ resetBtn:SetScript("OnClick", function()
 
     RefreshMLTools()
     print("|cff00ff00ML values reset for all players.|r")
+end)
+
+----------------------------------------------------------------
+-- SHOW GROUP/RAID ONLY CHECKBOX
+----------------------------------------------------------------
+local showGroupChk = CreateFrame("CheckButton", nil, mlPanel, "ChatConfigCheckButtonTemplate")
+
+-- Anchor it directly to the LEFT of the Reset button
+showGroupChk:SetPoint("RIGHT", resetBtn, "LEFT", -160, 0)
+showGroupChk:SetSize(24, 24)
+showGroupChk.tooltip = "Show only players currently in your group or raid."
+
+local chkLabel = mlPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+chkLabel:SetPoint("LEFT", showGroupChk, "RIGHT", 2, 0)
+chkLabel:SetText("Show group/raid players only")
+
+showGroupChk:SetScript("OnClick", function(self)
+    mlShowGroupOnly = self:GetChecked() or false
+    RefreshMLTools()
 end)
 
 ----------------------------------------------------------------
