@@ -34,11 +34,11 @@ Missing functionality I want to add/chage ASAP:
 28. (Done) A filter to show/hide dkp data of people who have left
 29. (Done) SYNC protected to only send data to current guild members
 30. Option for the Editors tab that shows how many known addon users
-31. Toggle for Inviter to also show online guildies who aren't on dkp table
+31. (Done) Toggle for Inviter to also show online guildies who aren't on dkp table
 32. Option on the RL tools tab that selects raid members
 33. (Done) Filter for DKP tab to show current raid members
 34. Edit button for DKP tab editors
-35. Inactive user option for dkp table
+35. Inactive user option for dkp table (biggie)
 36. Mangs changes - (redo RL tools and names of dkp table columns)
 
 
@@ -72,7 +72,7 @@ Known Bugs:
 27. Force sync to Lunatic did not show her accept in summary
 28. Double check summary info on inviter is counting tanks properly
 29. When not in group you are not missing in inviter, and ML scorecard shows blank
-30. The "Show hidden records" option on DKP tab has the old delete bug where it hides table rows at the end of the list
+30. The "Show hidden records" option on DKP tab has the old delete bug where it hides table rows at the end of the list.  Ultimately the DKP table has a redraw logic issue that prevents the table refresh, likely due to duplication of process or incorrect recycling of assets.  Thankfully it doesn't impact the data at all it's just a view issue that seems to get worse when you use more filters/sorting.
 
 
 Features to consider for the distant future:
