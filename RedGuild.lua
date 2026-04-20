@@ -34,9 +34,13 @@ local TAB_EDITORS = 5
 local TAB_AUDIT   = 6
 
 local activeTab = TAB_DKP
+local dkpLocked = true
 
 local SORT_COLOR   = "|cff3399ff"
 local NORMAL_COLOR = "|cffffffff"
+
+AllDKPNames = AllDKPNames or {}
+dkpShowGroupOnly = false
 
 local protectedInitialized = false
 
@@ -292,6 +296,22 @@ local function PopulateGuildClasses()
     end
 end
 
+function UpdateAddControls()
+    if not dkpPanel or not dkpPanel.addInput or not dkpPanel.addButton then
+        return
+    end
+
+    if dkpLocked then
+        dkpPanel.addInput:Hide()
+        dkpPanel.addButton:Hide()
+    else
+        if IsEditor(UnitName("player")) then
+            dkpPanel.addInput:Show()
+            dkpPanel.addButton:Show()
+        end
+    end
+end
+
 --------------------------------------------------
 -- Guild / Name Utilities
 --------------------------------------------------
@@ -421,15 +441,20 @@ local function GenerateAuditID()
     return tostring(time()) .. "-" .. math.random(100000, 999999)
 end
 
-local function ColorizeBalance(value)
-    value = tonumber(value) or 0
+local function ColorizeBalance(d)
+    if not d then
+        return "0"
+    end
 
-    if value > 0 then
-        return "|cff00ff00" .. value .. "|r"
-    elseif value < 0 then
-        return "|cffff0000" .. value .. "|r"
+    local balance  = tonumber(d.balance)  or 0
+    local lastWeek = tonumber(d.lastWeek) or 0
+
+    if balance > lastWeek then
+        return "|cff00ff00" .. balance .. "|r"   -- green
+    elseif balance < lastWeek then
+        return "|cffff0000" .. balance .. "|r"   -- red
     else
-        return tostring(value)
+        return tostring(balance)                 -- white/neutral
     end
 end
 
@@ -814,12 +839,12 @@ headers = {
     { text = "Name",       width = 80 },
 	{ text = "MS",         width = 30  },
     { text = "OS",         width = 40  },
-    { text = "LastWeek",   width = 65  },
+    { text = "Old Bal",    width = 65  },
     { text = "OnTime",     width = 65  },
-    { text = "Attend",     width = 70  },
+    { text = "PostRaid",     width = 70  },
     { text = "Bench",      width = 55  },
     { text = "Spent",      width = 55  },
-    { text = "Balance",    width = 65  },
+    { text = "Live Bal",   width = 65  },
 	{ text = "Rotations",  width = 55  },
     { text = "",           width = 55  },
 }
@@ -951,16 +976,19 @@ local scrollChild
 
 function UpdateTable()
     if not rows then rows = {} end
+    if UpdateAddControls then
+        UpdateAddControls()
+    end
 
     ----------------------------------------------------------------
     -- BUILD A STABLE LIST OF KEYS FIRST
     ----------------------------------------------------------------
-    local keys = {}
+    AllDKPNames = {}  -- always rebuild from the true source
     for name in pairs(RedGuild_Data) do
         if type(name) == "string" then
             local trimmed = strtrim(name)
             if trimmed ~= "" then
-                table.insert(keys, trimmed)
+                table.insert(AllDKPNames, trimmed)
             end
         end
     end
@@ -969,15 +997,53 @@ function UpdateTable()
     -- FILTER USING RUNTIME INVALID LOGIC
     ----------------------------------------------------------------
     local filtered = {}
-    for _, name in ipairs(keys) do
+    for _, name in ipairs(AllDKPNames) do
         local isInvalid = RuntimeInvalid(name)
-		if not isInvalid or showHiddenRecords then
-			table.insert(filtered, name)
-		end
+        if not isInvalid or showHiddenRecords then
+            table.insert(filtered, name)
+        end
     end
 
     ----------------------------------------------------------------
-    -- SORTING
+    -- APPLY GROUP/RAID FILTER (BEFORE SORTING)
+    ----------------------------------------------------------------
+    if dkpShowGroupOnly then
+        local groupFiltered = {}
+
+        for _, name in ipairs(filtered) do
+            local inGroup = false
+
+            if IsInRaid() then
+                for idx = 1, GetNumGroupMembers() do
+                    if Ambiguate(UnitName("raid"..idx), "short") == name then
+                        inGroup = true
+                        break
+                    end
+                end
+
+            elseif IsInGroup() then
+                for idx = 1, GetNumSubgroupMembers() do
+                    if Ambiguate(UnitName("party"..idx), "short") == name then
+                        inGroup = true
+                        break
+                    end
+                end
+
+                if Ambiguate(UnitName("player"), "short") == name then
+                    inGroup = true
+                end
+            end
+
+            if inGroup then
+                table.insert(groupFiltered, name)
+            end
+        end
+
+        filtered = groupFiltered
+    end
+
+    ----------------------------------------------------------------
+    -- SORTING (ON FINAL FILTERED LIST)
     ----------------------------------------------------------------
     if currentSortField == "name" then
         table.sort(filtered, function(a, b)
@@ -1023,16 +1089,16 @@ function UpdateTable()
     end
 
     ----------------------------------------------------------------
-    -- COMMIT SORTED NAMES
+    -- COMMIT SORTED NAMES (FINAL DATASET)
     ----------------------------------------------------------------
     sortedNames = filtered
-	
-	if scroll then
-		scroll:SetVerticalScroll(0)
-	end
+
+    if scroll then
+        scroll:SetVerticalScroll(0)
+    end
 
     ----------------------------------------------------------------
-    -- ENSURE WE HAVE ENOUGH ROWS FOR ALL NAMES
+    -- ENSURE WE HAVE ENOUGH ROWS FOR MAX POSSIBLE VISIBLE
     ----------------------------------------------------------------
     local needed  = #sortedNames
     local current = #rows
@@ -1046,28 +1112,69 @@ function UpdateTable()
     end
 
     ----------------------------------------------------------------
-    -- RENDER ROWS
+    -- RENDER ROWS (NO GROUP FILTER HERE ANYMORE)
     ----------------------------------------------------------------
-    local total = #sortedNames
+    local visibleIndex = 0
 
-    for i = 1, total do
-        local row = rows[i]
+    for i = 1, #sortedNames do
+        local name = sortedNames[i]
+        local d    = RedGuild_Data[name]
+        if not d then
+            d = EnsurePlayer(name)
+        end
+
+        visibleIndex = visibleIndex + 1
+        local row = rows[visibleIndex]
         if not row and CreateDKPRow then
-            row = CreateDKPRow(i)
-            rows[i] = row
+            row = CreateDKPRow(visibleIndex)
+            rows[visibleIndex] = row
         end
 
         if row then
-            local name = sortedNames[i]
-            local d    = RedGuild_Data[name]
-            if not d then
-                d = EnsurePlayer(name)
-            end
+            -- clear stale state
+            row.index = nil
+            row.name  = nil
 
-            row.index = i
+            row.index = visibleIndex
+            row.name  = name
+
             RecalcBalance(d)
 
-            -- Class colour
+            ----------------------------------------------------------------
+            -- LOCK / UNLOCK MODE (reversible)
+            ----------------------------------------------------------------
+            row:EnableMouse(not dkpLocked)
+
+            -- Delete button
+            if row.deleteButton then
+                if dkpLocked or not IsEditor(UnitName("player")) then
+                    row.deleteButton:Hide()
+                else
+                    row.deleteButton:Show()
+                end
+            end
+
+            -- MS/OS spec buttons: visible always, click disabled when locked
+            if row.mainSpecBtn then
+                row.mainSpecBtn:EnableMouse(not dkpLocked)
+            end
+
+            if row.offSpecBtn then
+                row.offSpecBtn:EnableMouse(not dkpLocked)
+            end
+
+            -- Inline editing: disable mouse when locked
+            if row.cols then
+                for _, col in ipairs(row.cols) do
+                    if col.EnableMouse then
+                        col:EnableMouse(not dkpLocked)
+                    end
+                end
+            end
+
+            ----------------------------------------------------------------
+            -- CLASS COLOUR + NAME
+            ----------------------------------------------------------------
             local classColor = "|cffffffff"
             if d.class then
                 local c = RAID_CLASS_COLORS[d.class]
@@ -1077,7 +1184,6 @@ function UpdateTable()
                 end
             end
 
-            -- Runtime invalid (for display only)
             local isInvalid = RuntimeInvalid(name)
             local displayName = name
             if isInvalid then
@@ -1086,26 +1192,30 @@ function UpdateTable()
 
             row.cols[1]:SetText(classColor .. displayName .. "|r")
 
-            -- MS SPEC ICON
+            ----------------------------------------------------------------
+            -- SPEC ICONS
+            ----------------------------------------------------------------
             do
                 local spec = d.msRole
                 local icon = SPEC_ICONS[spec]
                 row.cols[2].icon:SetTexture(icon or "Interface\\Icons\\INV_Misc_QuestionMark")
             end
 
-            -- OS SPEC ICON
             do
                 local spec = d.osRole
                 local icon = SPEC_ICONS[spec]
                 row.cols[3].icon:SetTexture(icon or "Interface\\Icons\\INV_Misc_QuestionMark")
             end
 
+            ----------------------------------------------------------------
+            -- NUMERIC COLUMNS
+            ----------------------------------------------------------------
             row.cols[4]:SetText(d.lastWeek or 0)
             row.cols[5]:SetText(d.onTime or 0)
             row.cols[6]:SetText(d.attendance or 0)
             row.cols[7]:SetText(d.bench or 0)
             row.cols[8]:SetText(d.spent or 0)
-            row.cols[9]:SetText(ColorizeBalance(d.balance))
+            row.cols[9]:SetText(ColorizeBalance(d))
 
             local rot = tonumber(d.rotated) or 0
             row.cols[10]:SetText(rot)
@@ -1115,14 +1225,14 @@ function UpdateTable()
     end
 
     ----------------------------------------------------------------
-    -- HIDE ANY EXTRA ROWS BEYOND THE DATA
+    -- HIDE ANY EXTRA ROWS BEYOND VISIBLE
     ----------------------------------------------------------------
-    for i = total + 1, #rows do
+    for i = visibleIndex + 1, #rows do
         local row = rows[i]
         if row then
-			row.index = nil
-			row.name  = nil   -- IMPORTANT FIX
-			row:Hide()
+            row.index = nil
+            row.name  = nil
+            row:Hide()
 
             if row.cols then
                 for _, col in ipairs(row.cols) do
@@ -1134,21 +1244,18 @@ function UpdateTable()
                 end
             end
 
-            if row.deleteButton then row.deleteButton:Hide() end
-            if row.tellButton   then row.tellButton:Hide()   end
-            if row.mainSpecBtn  then row.mainSpecBtn:Hide()  end
-            if row.offSpecBtn   then row.offSpecBtn:Hide()   end
+            if row.tellButton then row.tellButton:Hide() end
         end
     end
 
     ----------------------------------------------------------------
-    -- SCROLL HEIGHT
+    -- SCROLL HEIGHT (MATCH FINAL FILTERED DATASET)
     ----------------------------------------------------------------
-    local visibleRows = #sortedNames
-    local rowHeight   = 18
+    local totalRows = #sortedNames
+    local rowHeight = 18
 
     if scroll and scrollChild then
-        scrollChild:SetHeight(visibleRows * rowHeight)
+        scrollChild:SetHeight(totalRows * rowHeight)
 
         C_Timer.After(0, function()
             if scroll.ScrollBar then
@@ -1366,6 +1473,39 @@ end)
     -- PANELS
     --------------------------------------------------------------------
     dkpPanel     = CreateFrame("Frame", nil, mainFrame); LayoutPanel(dkpPanel)
+	
+	-- DKP LOCK ICON (Editors only)
+	local lockBtn = CreateFrame("Button", nil, dkpPanel)
+	lockBtn:SetSize(24, 24)
+	lockBtn:SetPoint("TOPRIGHT", dkpPanel, "TOPRIGHT", -20, -20)
+	
+	lockBtn.tex = lockBtn:CreateTexture(nil, "OVERLAY")
+	lockBtn.tex:SetTexture("Interface\\Buttons\\LockButton-Locked")
+	lockBtn.tex:SetAllPoints()
+	lockBtn:SetFrameStrata("HIGH")
+	lockBtn:SetFrameLevel(1000)
+
+local function UpdateLockIcon()
+    if dkpLocked then
+        lockBtn.tex:SetTexture("Interface\\Buttons\\LockButton-Locked")
+    else
+        lockBtn.tex:SetTexture("Interface\\Buttons\\LockButton-Unlocked")
+    end
+end
+
+	if not IsEditor(UnitName("player")) then
+		lockBtn:Hide()
+	end
+
+	lockBtn:SetScript("OnClick", function()
+		dkpLocked = not dkpLocked
+		UpdateLockIcon()
+		UpdateAddControls()
+		UpdateTable()
+	end)
+
+	UpdateLockIcon()
+	
 	-- Clicking anywhere on the DKP panel commits inline edits
 	dkpPanel:EnableMouse(true)
 	dkpPanel:SetPropagateMouseClicks(true)
@@ -1396,7 +1536,8 @@ do
     local title = groupPanel:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
     title:SetPoint("TOPLEFT", 30, -30)
     title:SetText("")
-
+	local RefreshGroupBuilder
+	
     ------------------------------------------------------------
     -- LEFT SIDE: SCROLL LIST (HALF WIDTH)
     ------------------------------------------------------------
@@ -1458,23 +1599,43 @@ do
         }
 
         for _, row in ipairs(groupRows) do
-            if row:IsShown() and row.checkbox:GetChecked() then
-                table.insert(selected, row.name)
+    if row:IsShown() and row.checkbox:GetChecked() then
+        table.insert(selected, row.name)
 
-                local class = RedGuild_Data[row.name].class
-                classCounts[class] = (classCounts[class] or 0) + 1
+        ------------------------------------------------------------
+        -- SAFE LOOKUP (DKP players have data, guild-only do not)
+        ------------------------------------------------------------
+        local d = RedGuild_Data[row.name]
 
-                local spec = RedGuild_Data[row.name].msRole
-                local role = SPEC_ROLES[spec]
-
-                if role == "tank" then roleCounts.tank = roleCounts.tank + 1
-                elseif role == "melee" then roleCounts.melee = roleCounts.melee + 1
-                elseif role == "ranged" then roleCounts.ranged = roleCounts.ranged + 1
-                elseif role == "caster" then roleCounts.caster = roleCounts.caster + 1
-                elseif role == "healer" then roleCounts.healer = roleCounts.healer + 1
-                else roleCounts.unknown = roleCounts.unknown + 1 end
-            end
+        ------------------------------------------------------------
+        -- CLASS COUNT (only DKP players have class data)
+        ------------------------------------------------------------
+        local class = d and d.class or nil
+        if class then
+            classCounts[class] = (classCounts[class] or 0) + 1
         end
+
+        ------------------------------------------------------------
+        -- ROLE COUNT (only DKP players have msRole)
+        ------------------------------------------------------------
+        local spec = d and d.msRole or nil
+        local role = SPEC_ROLES[spec]
+
+        if role == "tank" then
+            roleCounts.tank = roleCounts.tank + 1
+        elseif role == "melee" then
+            roleCounts.melee = roleCounts.melee + 1
+        elseif role == "ranged" then
+            roleCounts.ranged = roleCounts.ranged + 1
+        elseif role == "caster" then
+            roleCounts.caster = roleCounts.caster + 1
+        elseif role == "healer" then
+            roleCounts.healer = roleCounts.healer + 1
+        else
+            roleCounts.unknown = roleCounts.unknown + 1
+        end
+    end
+end
 
         local lines = {}
 
@@ -1493,7 +1654,7 @@ do
         end
 
         table.insert(lines, "")
-        table.insert(lines, "Roles:")
+        table.insert(lines, "Roles (Main spec ONLY):")
         table.insert(lines, string.format("  Tanks: %d", roleCounts.tank))
         table.insert(lines, string.format("  Melee DPS: %d", roleCounts.melee))
         table.insert(lines, string.format("  Ranged DPS: %d", roleCounts.ranged))
@@ -1535,8 +1696,15 @@ do
         else
             local row = {}
             for i, name in ipairs(missing) do
-                table.insert(row, "|cffff3333" .. name .. "|r")
-                if #row == 5 then
+                local online = IsPlayerOnline(name)
+				local offlineText = online and "" or " |cffaaaaaa(off)|r"
+				local online = IsPlayerOnline(name)
+
+				local colour = online and "|cffff3333" or "|cffaaaaaa"   -- red if online, grey if offline
+				local display = colour .. name .. "|r"
+
+				table.insert(row, display)
+                if #row == 4 then
                     table.insert(lines, "  " .. table.concat(row, ", "))
                     row = {}
                 end
@@ -1547,7 +1715,7 @@ do
         end
 
         infoText:SetText(table.concat(lines, "\n"))
-        infoText:SetText(infoText:GetText() .. "\n\n|cffff3333Roles counted are MAIN spec only.|r")
+        infoText:SetText(infoText:GetText() .. "\n\n|cffff3333Grey names are not online.|r")
     end
 
     ------------------------------------------------------------
@@ -1573,21 +1741,56 @@ do
 
         UpdateGroupBuilderInfo()
     end)
+	
+	------------------------------------------------------------
+	-- ADD ONLINE GUILD MEMBERS CHECKBOX
+	------------------------------------------------------------
+	local addGuildChk = CreateFrame("CheckButton", nil, groupPanel, "ChatConfigCheckButtonTemplate")
+	addGuildChk:SetPoint("LEFT", selectAllLabel, "RIGHT", 40, 0)
+	addGuildChk:SetSize(18, 18)
+
+	local addGuildLabel = groupPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	addGuildLabel:SetPoint("LEFT", addGuildChk, "RIGHT", 4, 0)
+	addGuildLabel:SetText("Add online guild members")
+
+	addGuildChk:SetScript("OnClick", function()
+		RefreshGroupBuilder()
+	end)
 
     ------------------------------------------------------------
     -- REFRESH LIST
     ------------------------------------------------------------
-    local function RefreshGroupBuilder()
+    RefreshGroupBuilder = function()
         for _, row in ipairs(groupRows) do
             row:Hide()
         end
         wipe(groupRows)
 
         local names = {}
-        for name in pairs(RedGuild_Data) do
-            table.insert(names, name)
-        end
-        table.sort(names)
+
+		-- 1. DKP table names
+		for name in pairs(RedGuild_Data) do
+			table.insert(names, name)
+		end
+
+		-- 2. Add online guild members if checkbox is ticked
+		if addGuildChk:GetChecked() then
+			local num = GetNumGuildMembers()
+			for i = 1, num do
+				local gName, _, _, _, _, _, _, _, online = GetGuildRosterInfo(i)
+				if gName then
+					gName = Ambiguate(gName, "short")
+					if online then
+						-- Only add if not already in DKP table
+						if not RedGuild_Data[gName] then
+							table.insert(names, gName)
+						end
+					end
+				end
+			end
+		end
+
+		table.sort(names)
 
         local i = 0
         for _, name in ipairs(names) do
@@ -1622,13 +1825,44 @@ do
                 row:SetPoint("TOPLEFT", 10, -(i - 1) * ROW_HEIGHT)
                 row.name = name
 
-                local class = RedGuild_Data[name].class
-                local colour = CLASS_COLORS[class] or "|cffffffff"
+                local class = RedGuild_Data[name] and RedGuild_Data[name].class or nil
+				local colour = CLASS_COLORS[class] or "|cffaaaaaa"   -- grey if unknown class
 
                 local online = IsPlayerOnline(name)
-                local offlineText = online and "" or " |cffaaaaaa(offline)|r"
+				local offlineText = online and "" or " |cffaaaaaa(offline)|r"
 
-                row.nameFS:SetText(colour .. name .. "|r" .. offlineText)
+				------------------------------------------------------------
+				-- IN-GROUP CHECK (raid or party)
+				------------------------------------------------------------
+				local inGroup = false
+
+				if IsInRaid() then
+					for i = 1, GetNumGroupMembers() do
+						if Ambiguate(UnitName("raid"..i), "short") == name then
+							inGroup = true
+							break
+						end
+					end
+				elseif IsInGroup() then
+					for i = 1, GetNumSubgroupMembers() do
+						if Ambiguate(UnitName("party"..i), "short") == name then
+							inGroup = true
+							break
+						end
+					end
+
+					-- Include the player themselves
+					if Ambiguate(UnitName("player"), "short") == name then
+						inGroup = true
+					end
+				end
+
+				local inGroupText = inGroup and " |cff00ff00(in group)|r" or ""
+
+				------------------------------------------------------------
+				-- FINAL NAME STRING
+				------------------------------------------------------------
+				row.nameFS:SetText(colour .. name .. "|r" .. offlineText .. inGroupText)
 
                 row.checkbox:SetChecked(selectedState[name] or false)
 
@@ -2326,10 +2560,6 @@ end)
             Print("Only an editor can perform this function.")
             return
         end
-        if UsedToday("onTime") then
-            Print("Already allocated today.")
-            return
-        end
         StaticPopup_Show("REDGUILD_ON_TIME_CHECK")
         MarkUsedToday("onTime")
     end)
@@ -2341,10 +2571,6 @@ end)
     attendanceBtn:SetScript("OnClick", function()
         if not IsAuthorized() then
             Print("Only and editor can perform this function.")
-            return
-        end
-        if UsedToday("attendance") then
-            Print("Already allocated today.")
             return
         end
         StaticPopup_Show("REDGUILD_ALLOCATE_ATTENDANCE")
@@ -2369,8 +2595,8 @@ benchBtn:SetScript("OnClick", function()
 
                 if d then
                     local old = tonumber(d.attendance or 0) or 0
-                    local new = old + 15
-                    if new > 30 then new = 30 end
+                    local new = old + 20	
+                    if new > 20 then new = 20 end
 
                     if new ~= old then
                         d.attendance = new
@@ -2382,7 +2608,7 @@ benchBtn:SetScript("OnClick", function()
 
 		BumpDKPVersion()
         UpdateTable()
-        Print("Bench DKP allocated to selected players (up to a maximum of 30).")
+        Print("Bench DKP allocated to selected players (up to a maximum of 15).")
     end
 
     ApplyBench()
@@ -2391,10 +2617,10 @@ end)
     local newWeekBtn = CreateFrame("Button", nil, raidPanel, "UIPanelButtonTemplate")
     newWeekBtn:SetSize(200, 30)
     newWeekBtn:SetPoint("BOTTOMRIGHT", raidPanel, "BOTTOMRIGHT", -100, 20)
-    newWeekBtn:SetText("Start a New DKP Week")
+    newWeekBtn:SetText("Start New DKP Session")
     newWeekBtn:SetScript("OnClick", function()
         if not IsAuthorized() then
-            Print("Only editors can start a new DKP week.")
+            Print("Only editors can start a new DKP session.")
             return
         end
         StaticPopup_Show("REDGUILD_NEW_WEEK")
@@ -2752,6 +2978,58 @@ do
     if headerButtons[1] then
         headerButtons[1].text:SetText(SORT_COLOR .. headers[1].text .. "|r")
     end
+	
+----------------------------------------------------------------
+-- DKP FILTER CHECKBOXES (top-left above table)
+----------------------------------------------------------------
+if IsEditor(UnitName("player")) then
+
+-- SHOW HIDDEN RECORDS
+local showHiddenChk = CreateFrame("CheckButton", nil, dkpPanel, "ChatConfigCheckButtonTemplate")
+showHiddenChk:SetPoint("TOPLEFT", dkpPanel, "TOPLEFT", 80, -30)
+showHiddenChk:SetSize(18, 18)
+
+local showHiddenLabel = dkpPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+showHiddenLabel:SetPoint("LEFT", showHiddenChk, "RIGHT", 4, 0)
+showHiddenLabel:SetText("Show hidden records")
+
+-- Only editors see it
+if not IsEditor(UnitName("player")) then
+    showHiddenChk:Hide()
+    showHiddenLabel:Hide()
+end
+
+showHiddenChk:SetScript("OnClick", function(self)
+    showHiddenRecords = self:GetChecked() or false
+    UpdateTable()
+end)
+
+
+----------------------------------------------------------------
+-- SHOW GROUP/RAID ONLY
+----------------------------------------------------------------
+local showGroupChk = CreateFrame("CheckButton", nil, dkpPanel, "ChatConfigCheckButtonTemplate")
+showGroupChk:SetPoint("LEFT", showHiddenLabel, "RIGHT", 40, 0)
+showGroupChk:SetSize(18, 18)
+
+local showGroupLabel = dkpPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+showGroupLabel:SetPoint("LEFT", showGroupChk, "RIGHT", 4, 0)
+showGroupLabel:SetText("Show group/raid players only")
+
+-- Only editors see it
+if not IsEditor(UnitName("player")) then
+    showGroupChk:Hide()
+    showGroupLabel:Hide()
+end
+
+showGroupChk:SetScript("OnClick", function(self)
+    C_Timer.After(0, function()
+        dkpShowGroupOnly = self:GetChecked()
+        UpdateTable()
+    end)
+end)
+
+end
 
     scroll = CreateFrame("ScrollFrame", nil, dkpPanel, "UIPanelScrollFrameTemplate")
     scroll:SetPoint("TOPLEFT", dkpPanel, "TOPLEFT", 30, headerY - 20)
@@ -2788,11 +3066,13 @@ function CreateDKPRow(i)
     delBtn:SetText("x")
     row.deleteButton = delBtn
 
+    -- Only hide for non‑editors (NOT for lock state)
     if not IsEditor(UnitName("player")) then
         row.deleteButton:Hide()
     end
 
     delBtn:SetScript("OnClick", function()
+        if dkpLocked then return end
         if not IsAuthorized() then
             Print("Only editors can delete DKP records.")
             return
@@ -2826,7 +3106,11 @@ function CreateDKPRow(i)
             col.icon:SetAllPoints()
             col.icon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
 
+            row.mainSpecBtn = row.mainSpecBtn or (field == "msRole" and col or row.mainSpecBtn)
+            row.offSpecBtn  = row.offSpecBtn  or (field == "osRole" and col or row.offSpecBtn)
+
             col:SetScript("OnClick", function()
+                if dkpLocked then return end
                 if not IsAuthorized() then return end
 
                 local player = sortedNames[row.index]
@@ -2880,6 +3164,7 @@ function CreateDKPRow(i)
             col:GetHighlightTexture():SetAlpha(0.3)
 
             col:SetScript("OnMouseDown", function(self, button)
+                if dkpLocked then return end
                 if not IsAuthorized() then return end
 
                 local rowIndex = row.index
@@ -2913,6 +3198,8 @@ function CreateDKPRow(i)
             col:SetSize(h.width - 10, 16)
             col:SetText("Tell")
 
+            row.tellButton = col
+
             col:SetScript("OnClick", function()
                 local index = row.index
                 if not index then return end
@@ -2921,7 +3208,7 @@ function CreateDKPRow(i)
                 local d = RedGuild_Data[player]
                 if not d then return end
                 local msg = string.format(
-                    "Your DKP: LastWeek=%d, OnTime=%d, Attendance=%d, Bench=%d, Spent=%d, CURRENTBalance=%d",
+                    "Your DKP: Previous=%d, OnTime=%d, PostRaid(Attend)=%d, Bench=%d, Spent=%d, CURRENTBalance=%d",
                     d.lastWeek or 0,
                     d.onTime or 0,
                     d.attendance or 0,
@@ -2948,6 +3235,7 @@ function CreateDKPRow(i)
             col:EnableMouse(true)
 
             col:SetScript("OnMouseDown", function(self, button)
+                if dkpLocked then return end
                 if button ~= "LeftButton" then return end
                 if not IsAuthorized() then return end
 
@@ -2964,6 +3252,7 @@ function CreateDKPRow(i)
                 -- NAME EDIT
                 if fieldKey == "name" then
                     local playerName = sortedNames[row.index]
+                    if dkpLocked then return end
                     if not playerName then return end
 
                     inlineEdit:Hide()
@@ -3052,14 +3341,20 @@ function CreateDKPRow(i)
 
                     local old = dkp[fieldName]
 
-                    if fieldName == "onTime" and num > 10 then
-                        Print("|cffff5555On-Time DKP cannot exceed 10.|r")
+                    if fieldName == "onTime" and num > 5 then
+                        Print("|cffff5555On-Time DKP cannot exceed 5.|r")
                         UpdateTable()
                         return
                     end
 
-                    if fieldName == "attendance" and num > 30 then
-                        Print("|cffff5555Attendance DKP cannot exceed 30.|r")
+                    if fieldName == "attendance" and num > 15 then
+                        Print("|cffff5555Attendance DKP cannot exceed 15.|r")
+                        UpdateTable()
+                        return
+                    end
+
+                    if fieldName == "bench" and num > 20 then
+                        Print("|cffff5555Bench DKP cannot exceed 20.|r")
                         UpdateTable()
                         return
                     end
@@ -3077,7 +3372,7 @@ function CreateDKPRow(i)
                     end
 
                     LogAudit(playerName, fieldName, old, num)
-					BumpDKPVersion()
+                    BumpDKPVersion()
                     UpdateTable()
                 end
 
@@ -3146,31 +3441,12 @@ end)
 
 end
 
--- SHOW HIDDEN RECORDS (Editors only)
-local showHiddenChk = CreateFrame("CheckButton", nil, dkpPanel, "ChatConfigCheckButtonTemplate")
-showHiddenChk:SetPoint("BOTTOMLEFT", dkpPanel, "BOTTOMLEFT", 20, 35)
-showHiddenChk:SetSize(18, 18)
-
-local showHiddenLabel = dkpPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-showHiddenLabel:SetPoint("LEFT", showHiddenChk, "RIGHT", 4, 0)
-showHiddenLabel:SetText("Show hidden records")
-
--- Only editors can see this checkbox
-if not IsEditor(UnitName("player")) then
-    showHiddenChk:Hide()
-    showHiddenLabel:Hide()
-end
-
-showHiddenChk:SetScript("OnClick", function(self)
-    showHiddenRecords = self:GetChecked() or false
-    UpdateTable()
-end)
-
     --------------------------------------------------------------------
     -- ADD PLAYER INPUT
     --------------------------------------------------------------------
     do
-        local addInput = CreateFrame("EditBox", nil, dkpPanel, "InputBoxTemplate")
+        dkpPanel.addInput = CreateFrame("EditBox", nil, dkpPanel, "InputBoxTemplate")
+		local addInput = dkpPanel.addInput
         addInput:SetSize(140, 20)
         addInput:SetPoint("BOTTOMLEFT", dkpPanel, "BOTTOMLEFT", 20, 10)
         addInput:SetAutoFocus(false)
@@ -3203,8 +3479,9 @@ end)
         addInput:SetScript("OnEscapePressed", addInput.ClearFocus)
         addInput:SetScript("OnEnterPressed", addInput.ClearFocus)
 
-        local addButton = CreateFrame("Button", nil, dkpPanel, "UIPanelButtonTemplate")
-        addButton:SetSize(100, 22)
+        dkpPanel.addButton = CreateFrame("Button", nil, dkpPanel, "UIPanelButtonTemplate")
+		local addButton = dkpPanel.addButton
+        addButton:SetSize(75, 22)
         addButton:SetPoint("LEFT", addInput, "RIGHT", 10, 0)
         addButton:SetText("Add")
 
@@ -3285,7 +3562,62 @@ end)
         requestBtn:SetSize(120, 24)
         requestBtn:SetText("Request SYNC")
         requestBtn:SetPoint("BOTTOMRIGHT", dkpPanel, "BOTTOMRIGHT", -10, 10)
-		requestBtn:SetScript("OnClick", function()
+requestBtn:SetScript("OnClick", function()
+    -- Editors get a confirmation popup
+    if IsEditor(UnitName("player")) then
+        StaticPopupDialogs["REDGUILD_REQUEST_SYNC_EDITOR_CONFIRM"] = {
+            text = "Sync from another editor?",
+            button1 = "Yes",
+            button2 = "No",
+            OnAccept = function()
+                ------------------------------------------------------------
+                -- ORIGINAL SYNC REQUEST CODE (unchanged)
+                ------------------------------------------------------------
+                EnsureSaved()
+                UpdateOnlineEditors()
+
+                local meReal = Ambiguate(UnitName("player"), "short")
+                if not meReal or meReal == "" then
+                    Print("Unable to determine your character name for sync.")
+                    return
+                end
+
+                if RedGuild_SyncLocked then
+                    Print("Sync is currently locked. Please wait a few seconds and try again.")
+                    return
+                end
+
+                if not IsInGuild() then
+                    Print("Guild roster not ready — cannot request sync yet.")
+                    return
+                end
+
+                local num = GetNumGuildMembers()
+                if num == 0 then
+                    Print("Guild roster not ready — cannot request sync yet.")
+                    return
+                end
+
+                local bestEditor = GetHighestRankEditor()
+                if not bestEditor then
+                    Print("No editor online — cannot request sync.")
+                    return
+                end
+
+                RedGuild_Send("REQUEST", meReal, bestEditor)
+            end,
+            timeout = 0,
+            whileDead = true,
+            hideOnEscape = true,
+        }
+
+        StaticPopup_Show("REDGUILD_REQUEST_SYNC_EDITOR_CONFIRM")
+        return
+    end
+
+    ------------------------------------------------------------
+    -- NON‑EDITORS: run original code immediately
+    ------------------------------------------------------------
     EnsureSaved()
     UpdateOnlineEditors()
 
@@ -3612,6 +3944,18 @@ StaticPopupDialogs["REDGUILD_FORCE_SYNC_CONFIRM"] = {
     hideOnEscape = true,
 }
 
+StaticPopupDialogs["REDGUILD_REQUEST_SYNC_EDITOR_CONFIRM"] = {
+    text = "Sync for another editor?",
+    button1 = "Yes",
+    button2 = "No",
+    OnAccept = function()
+        RedGuild_DoRequestSync()
+    end,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+}
+
 StaticPopupDialogs["REDGUILD_FORCE_SYNC_RECEIVE"] = {
     text = "Accept sync data from %s?",
     button1 = "Accept",
@@ -3660,9 +4004,9 @@ StaticPopupDialogs["REDGUILD_ON_TIME_CHECK"] = {
 
                 local old = d.onTime or 0
                 local new = old + 5
-                if new > 10 then
-                    new = 10
-                    Print("|cffff5555On-Time DKP cannot exceed 10 in a single DKP week. Value capped.|r")
+                if new > 5 then
+                    new = 5
+                    Print("|cffff5555On-Time DKP cannot exceed 5 in a single DKP session. Value capped.|r")
                 end
 
                 d.onTime = new
@@ -3694,9 +4038,9 @@ StaticPopupDialogs["REDGUILD_ALLOCATE_ATTENDANCE"] = {
 
                 local old = d.attendance or 0
                 local new = old + 15
-                if new > 30 then
-                    new = 30
-                    Print("|cffff5555Attendance DKP cannot exceed 30 in a single DKP week. Value capped.|r")
+                if new > 15 then
+                    new = 15
+                    Print("|cffff5555Attendance DKP cannot exceed 15 in a single DKP session. Value capped.|r")
                 end
 
                 d.attendance = new
@@ -3715,12 +4059,12 @@ StaticPopupDialogs["REDGUILD_ALLOCATE_ATTENDANCE"] = {
 }
 
 StaticPopupDialogs["REDGUILD_NEW_WEEK"] = {
-    text = "Start a new DKP week? This will move current totals into LastWeek.",
+    text = "Start a new DKP session? This will move all current values into Old Bal.",
     button1 = "Yes",
     button2 = "No",
     OnAccept = function()
         for name, d in pairs(RedGuild_Data) do
-            local oldBalance = d.balance or 0
+            local oldBalance = d.balance + d.attendance or 0
 
             d.lastWeek   = oldBalance
             d.onTime     = 0
@@ -4191,32 +4535,39 @@ if event == "CHAT_MSG_WHISPER" then
 
     sender = Ambiguate(sender, "short")
 
-    -- AUTO-REPLY: "What is my DKP?"
-    do
-        local lower = text:lower()
-        if lower:find("what is my dkp", 1, true)
-            or lower:find("whats my dkp", 1, true)
-            or lower:find("what's my dkp", 1, true)
-        then
-            if IsAuthorized() then
-                local d = RedGuild_Data[sender]
-                if d then
-                    d.balance = (
-                        (d.lastWeek or 0)
-                        + (d.onTime or 0)
-                        + (d.attendance or 0)
-                        + (d.bench or 0)
-                        - (d.spent or 0)
-                    )
-                    local balance = tonumber(d.balance or 0) or 0
-                    local reply = string.format("Your DKP: %d", balance)
-                    reply = reply:gsub("|", "||")
-                    SendChatMessage(reply, "WHISPER", nil, sender)
-                else
-                    SendChatMessage(
-                        "I don't have any DKP data recorded for you yet.",
-                        "WHISPER", nil, sender
-                    )
+-- AUTO-REPLY: "What is my DKP?"
+do
+    local lower = text:lower()
+    if lower:find("what is my dkp", 1, true)
+        or lower:find("whats my dkp", 1, true)
+        or lower:find("what's my dkp", 1, true)
+    then
+        if IsAuthorized() then
+            local d = RedGuild_Data[sender]
+            if d then
+                d.balance = (
+                    (d.lastWeek or 0)
+                    + (d.onTime or 0)
+                    + (d.bench or 0)
+                    - (d.spent or 0)
+                )
+
+                local balance = tonumber(d.balance or 0) or 0
+
+                -- Easter egg: 69 → NICE!
+                local suffix = ""
+                if balance == 69 then
+                    suffix = "  NICE!"
+                end
+
+                local reply = string.format("Your DKP: %d%s", balance, suffix)
+                reply = reply:gsub("|", "||")
+                SendChatMessage(reply, "WHISPER", nil, sender)
+            else
+                SendChatMessage(
+                    "I don't have any DKP data recorded for you yet.",
+                    "WHISPER", nil, sender
+                )
                 end
             end
             return
