@@ -71,6 +71,7 @@ Known Bugs:
 26. (Fixed) Raid leader detection wasn't working (only assistant)
 27. Force sync to Lunatic did not show her accept in summary
 28. Double check summary info on inviter is counting tanks properly
+29. When not in group you are not missing in inviter, and ML scorecard shows blank
 
 
 Features to consider for the distant future:
