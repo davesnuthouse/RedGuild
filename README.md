@@ -35,6 +35,7 @@ Missing functionality I want to add/chage ASAP:
 29. (Done) SYNC protected to only send data to current guild members
 30. Option for the Editors tab that shows how many known addon users
 31. Toggle for Inviter to also show online guildies who aren't on dkp table
+32. Option on the RL tools tab that selects raid members
 
 
 Known Bugs:
