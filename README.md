@@ -6,9 +6,9 @@ NOTE - YOU SHOULD ONLY USE THE RELEASE VERSION ON CURSEFORGE.  THE LUA LISTED HE
 
 
 Missing functionality from 1.0.69:
->> A prettier way to handle the tell/whisper option?
-> (Done but also never done!) Improve EE use
-> Master switch to turn SYNC off on Editors page
+* A prettier way to handle the tell/whisper option?
+* (Done but also never done!) Improve EE use
+* Master switch to turn SYNC off on Editors page
 > Revisit audit log now that sync is working
 > Option for the Editors tab that shows how many known addon users
 > Option on the RL tools tab that selects raid members
