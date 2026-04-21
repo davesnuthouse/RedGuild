@@ -328,6 +328,16 @@ local function RLTools_HasSelections()
     return false
 end
 
+local function CountOnlineAddonUsers()
+    local count = 0
+    for name in pairs(RedGuild_Config.addonUsers) do
+        if IsPlayerOnline(name) then
+            count = count + 1
+        end
+    end
+    return count
+end
+
 --------------------------------------------------
 -- Guild / Name Utilities
 --------------------------------------------------
@@ -2758,6 +2768,7 @@ end
     -- EDITORS PANEL
     --------------------------------------------------------------------
 	local versionLabel
+	local addonOnlineFS
     do
         local title = editorsPanel:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
         title:SetPoint("TOPLEFT", 10, -10)
@@ -2966,6 +2977,8 @@ versionEdit:SetPoint("LEFT", versionLabel, "RIGHT", 10, 0)
 
 -- Load current version when panel is shown
 editorsPanel:HookScript("OnShow", function()
+    local online = CountOnlineAddonUsers()
+    addonOnlineFS:SetText("Addon users online: " .. online)
     versionEdit:SetText(tostring(RedGuild_Config.dkpVersion or 0))
 end)
 
@@ -3021,6 +3034,14 @@ end)
 hideSyncChk:SetScript("OnClick", function(self)
     RedGuild_Config.hideMeFromSync = self:GetChecked() and true or false
 end)
+
+------------------------------------------------------------
+-- ADDON USERS ONLINE
+------------------------------------------------------------
+addonOnlineFS = editorsPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+addonOnlineFS:SetPoint("BOTTOMRIGHT", editorsPanel, "BOTTOMRIGHT", -35, 50)
+addonOnlineFS:SetJustifyH("RIGHT")
+addonOnlineFS:SetText("Addon users online: 0")
 
     --------------------------------------------------------------------
     -- AUDIT PANEL
@@ -4568,6 +4589,10 @@ if event == "CHAT_MSG_ADDON" then
 
     sender = Ambiguate(sender, "short")
     if sender == UnitName("player") then return end
+	
+	-- Track addon users
+	local key = NormalizeName(sender)
+	RedGuild_Config.addonUsers[key] = true
 
     ---------------------------------------------------------
     -- CHUNKED MESSAGES (DATA / EDITORSYNC / FORCE_REQ)
