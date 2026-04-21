@@ -845,7 +845,7 @@ headers = {
     { text = "Bench",      width = 55  },
     { text = "Spent",      width = 55  },
     { text = "Live Bal",   width = 65  },
-	{ text = "Rotations",  width = 55  },
+	{ text = "Rotated",  width = 55  },
     { text = "",           width = 55  },
 }
 
@@ -1143,34 +1143,39 @@ function UpdateTable()
             ----------------------------------------------------------------
             -- LOCK / UNLOCK MODE (reversible)
             ----------------------------------------------------------------
-            row:EnableMouse(not dkpLocked)
+row:EnableMouse(true)
 
-            -- Delete button
-            if row.deleteButton then
-                if dkpLocked or not IsEditor(UnitName("player")) then
-                    row.deleteButton:Hide()
-                else
-                    row.deleteButton:Show()
-                end
-            end
+-- Delete button
+if row.deleteButton then
+    if dkpLocked or not IsEditor(UnitName("player")) then
+        row.deleteButton:Hide()
+    else
+        row.deleteButton:Show()
+    end
+end
 
-            -- MS/OS spec buttons: visible always, click disabled when locked
-            if row.mainSpecBtn then
-                row.mainSpecBtn:EnableMouse(not dkpLocked)
-            end
+-- MS/OS spec buttons: visible always, click disabled when locked
+if row.mainSpecBtn then
+    row.mainSpecBtn:EnableMouse(not dkpLocked)
+end
 
-            if row.offSpecBtn then
-                row.offSpecBtn:EnableMouse(not dkpLocked)
-            end
+if row.offSpecBtn then
+    row.offSpecBtn:EnableMouse(not dkpLocked)
+end
 
-            -- Inline editing: disable mouse when locked
-            if row.cols then
-                for _, col in ipairs(row.cols) do
-                    if col.EnableMouse then
-                        col:EnableMouse(not dkpLocked)
-                    end
-                end
-            end
+-- Inline editing: disable mouse when locked
+if row.cols then
+    for _, col in ipairs(row.cols) do
+        if col.EnableMouse then
+            col:EnableMouse(not dkpLocked)
+        end
+    end
+end
+
+-- Tell button ALWAYS clickable
+if row.tellButton then
+    row.tellButton:EnableMouse(true)
+end
 
             ----------------------------------------------------------------
             -- CLASS COLOUR + NAME
@@ -1190,7 +1195,7 @@ function UpdateTable()
                 displayName = "|cffff0000-|r " .. displayName
             end
 
-            row.cols[1]:SetText(classColor .. displayName .. "|r")
+            row.cols[1].fs:SetText(classColor .. displayName .. "|r")
 
             ----------------------------------------------------------------
             -- SPEC ICONS
@@ -1474,37 +1479,37 @@ end)
     --------------------------------------------------------------------
     dkpPanel     = CreateFrame("Frame", nil, mainFrame); LayoutPanel(dkpPanel)
 	
-	-- DKP LOCK ICON (Editors only)
-	local lockBtn = CreateFrame("Button", nil, dkpPanel)
-	lockBtn:SetSize(24, 24)
-	lockBtn:SetPoint("TOPRIGHT", dkpPanel, "TOPRIGHT", -20, -20)
-	
-	lockBtn.tex = lockBtn:CreateTexture(nil, "OVERLAY")
-	lockBtn.tex:SetTexture("Interface\\Buttons\\LockButton-Locked")
-	lockBtn.tex:SetAllPoints()
-	lockBtn:SetFrameStrata("HIGH")
-	lockBtn:SetFrameLevel(1000)
+-- DKP LOCK BUTTON (Editors only)
+local lockBtn = CreateFrame("Button", nil, dkpPanel, "UIPanelButtonTemplate")
+lockBtn:SetSize(60, 20)
+lockBtn:SetScale(0.8)
+lockBtn:SetPoint("TOPRIGHT", dkpPanel, "TOPRIGHT", -20, -50)
+lockBtn:SetFrameStrata("HIGH")
+lockBtn:SetFrameLevel(1000)
 
-local function UpdateLockIcon()
+local function UpdateLockButtonText()
     if dkpLocked then
-        lockBtn.tex:SetTexture("Interface\\Buttons\\LockButton-Locked")
+        lockBtn:SetText("Unlock")
     else
-        lockBtn.tex:SetTexture("Interface\\Buttons\\LockButton-Unlocked")
+        lockBtn:SetText("Lock")
     end
 end
 
-	if not IsEditor(UnitName("player")) then
-		lockBtn:Hide()
-	end
+-- Only visible to editors
+if not IsEditor(UnitName("player")) then
+    lockBtn:Hide()
+else
+    lockBtn:Show()
+end
 
-	lockBtn:SetScript("OnClick", function()
-		dkpLocked = not dkpLocked
-		UpdateLockIcon()
-		UpdateAddControls()
-		UpdateTable()
-	end)
+lockBtn:SetScript("OnClick", function()
+    dkpLocked = not dkpLocked
+    UpdateLockButtonText()
+    UpdateAddControls()
+    UpdateTable()
+end)
 
-	UpdateLockIcon()
+UpdateLockButtonText()
 	
 	-- Clicking anywhere on the DKP panel commits inline edits
 	dkpPanel:EnableMouse(true)
@@ -3091,11 +3096,16 @@ function CreateDKPRow(i)
         local col
 
         if field == "name" then
-            col = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-            col:SetPoint("LEFT", row, "LEFT", colX, 0)
-            col:SetWidth(h.width)
-            col:SetJustifyH("LEFT")
-            col:EnableMouse(true)
+    -- Make name column a clickable button instead of a FontString
+    col = CreateFrame("Button", nil, row)
+    col:SetPoint("LEFT", row, "LEFT", colX, 0)
+    col:SetSize(h.width, ROW_HEIGHT)
+    col:EnableMouse(true)
+
+    local fs = col:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    fs:SetAllPoints()
+    fs:SetJustifyH("LEFT")
+    col.fs = fs
 
         elseif field == "msRole" or field == "osRole" then
             col = CreateFrame("Button", nil, row)
@@ -3250,72 +3260,74 @@ function CreateDKPRow(i)
                 local d = EnsurePlayer(player)
 
                 -- NAME EDIT
-                if fieldKey == "name" then
-                    local playerName = sortedNames[row.index]
-                    if dkpLocked then return end
-                    if not playerName then return end
+if fieldKey == "name" then
+    if dkpLocked then return end
+    if button ~= "LeftButton" then return end
+    if not IsAuthorized() then return end
 
-                    inlineEdit:Hide()
-                    self:Hide()
+    local playerName = sortedNames[row.index]
+    if not playerName then return end
 
-                    inlineEdit.currentFS = self
-                    inlineEdit.editPlayer = playerName
-                    inlineEdit.editField  = "name"
+    inlineEdit:Hide()
+    self:Hide()
 
-                    inlineEdit:ClearAllPoints()
-                    inlineEdit:SetPoint("LEFT", self, "LEFT", 0, 0)
-                    inlineEdit:SetWidth(headers[colIndex].width - 4)
-                    inlineEdit:SetText(playerName)
-                    inlineEdit:HighlightText()
+    inlineEdit.currentFS = self
+    inlineEdit.editPlayer = playerName
+    inlineEdit.editField  = "name"
 
-                    inlineEdit.saveFunc = function(newName)
-                        newName = newName:gsub("^%s*(.-)%s*$", "%1")
-                        if newName == "" or newName == playerName then return end
+    inlineEdit:ClearAllPoints()
+    inlineEdit:SetPoint("LEFT", self, "LEFT", 0, 0)
+    inlineEdit:SetWidth(headers[colIndex].width - 4)
+    inlineEdit:SetText(playerName)
+    inlineEdit:HighlightText()
 
-                        local short = Ambiguate(newName, "short")
+    inlineEdit.saveFunc = function(newName)
+        newName = newName:gsub("^%s*(.-)%s*$", "%1")
+        if newName == "" or newName == playerName then return end
 
-                        local ok, proper = IsNameInGuild(short)
-                        if not ok then
-                            Print("|cffff5555Cannot rename — that player is not in your guild.|r")
-                            return
-                        end
+        local short = Ambiguate(newName, "short")
+        local ok, proper = IsNameInGuild(short)
+        if not ok then
+            Print("|cffff5555Cannot rename — that player is not in your guild.|r")
+            return
+        end
 
-                        newName = proper
+        newName = proper
 
-                        if NameExists(newName, playerName) then
-                            Print("|cffff5555A player with that name already exists.|r")
-                            return
-                        end
+        if NameExists(newName, playerName) then
+            Print("|cffff5555A player with that name already exists.|r")
+            return
+        end
 
-                        RedGuild_Data[newName] = RedGuild_Data[playerName]
-                        RedGuild_Data[playerName] = nil
+        RedGuild_Data[newName] = RedGuild_Data[playerName]
+        RedGuild_Data[playerName] = nil
 
-                        local _, class = UnitClass(newName)
-                        if not class and IsInGuild() then
-                            for gi = 1, GetNumGuildMembers() do
-                                local gName, _, _, _, _, _, _, _, _, _, gClass = GetGuildRosterInfo(gi)
-                                if gName and Ambiguate(gName, "short") == newName then
-                                    class = gClass
-                                    break
-                                end
-                            end
-                        end
-                        if class then
-                            RedGuild_Data[newName].class = class
-                        end
-
-                        LogAudit(newName, "RENAME_PLAYER", "changed",
-                            string.format("Renamed by %s | %s → %s", UnitName("player"), playerName, newName)
-                        )
-
-                        suppressWarnings = true
-                        UpdateTable()
-                        suppressWarnings = false
-                    end
-
-                    inlineEdit:Show()
-                    return
+        local _, class = UnitClass(newName)
+        if not class and IsInGuild() then
+            for gi = 1, GetNumGuildMembers() do
+                local gName, _, _, _, _, _, _, _, _, _, gClass = GetGuildRosterInfo(gi)
+                if gName and Ambiguate(gName, "short") == newName then
+                    class = gClass
+                    break
                 end
+            end
+        end
+        if class then
+            RedGuild_Data[newName].class = class
+        end
+
+        LogAudit(newName, "RENAME_PLAYER", "changed",
+            string.format("Renamed by %s | %s → %s", UnitName("player"), playerName, newName)
+        )
+
+        suppressWarnings = true
+        UpdateTable()
+        suppressWarnings = false
+    end
+
+    inlineEdit:Show()
+    return
+end
 
                 -- NUMERIC FIELD EDIT
                 self:Hide()
