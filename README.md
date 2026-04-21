@@ -7,7 +7,7 @@ NOTE - YOU SHOULD ONLY USE THE RELEASE VERSION ON CURSEFORGE.  THE LUA LISTED HE
 
 Missing functionality from 1.0.69:
 * (Done) Master switch to turn SYNC off on Editors page
-* Option for the Editors tab that shows how many known addon users
+* (Done) Option for the Editors tab that shows how many known addon users. Also fixed that the addon wasn't storing data for addon users properly.
 * (Done) Option on the RL tools tab that selects raid members
 * (Done) Edit button for DKP tab editors
 * (Done) Mangs changes - (tweaks to names of dkp table columns and "new week" button)
