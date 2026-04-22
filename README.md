@@ -25,16 +25,17 @@ Known Minor Bugs:
 * (Fixed) DKP table headers cutoff?  (Rotation)
 * Force sync to Lunatic did not show her accept in summary (cosmetic)
 * Double check summary info on inviter is counting tanks properly
-* When not in group you are not missing in inviter, and ML scorecard shows blank
+* (Fixed) When not in group you are not missing in inviter, and ML scorecard shows blank
 * Editors moving to alts will allow their DKP table to be overridden by other editors because they now fall into the autosync rule.  Workaround is they do not use addon on alts.
 * ML Scorecard needs reset to pull names rather than onload
+* Inviter shows "In your group 0" when not grouped (cosmetic)
 
 Showstopper Bugs:
 * The "Show hidden records" and "Show current raid members" options on DKP tab has the old bug where it hides table rows at the end of the list.  Ultimately the DKP table has a redraw logic issue that prevents the table refreshing correctly, likely due to duplication of process or incorrect recycling of assets.  Thankfully it doesn't impact the data at all it's just a view issue that seems to get worse when you use more filters/sorting.
 * Lock/Unlock funtionality has made names field unable to be edited
 
 
-Features to consider for the distant future:
+For future releases:
 * Colour coding in the logs to make them easier to read
 * More buttons for RL Tools
 * Full support for DKP bidding
