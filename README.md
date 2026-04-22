@@ -7,9 +7,6 @@ NOTE - YOU SHOULD ONLY USE THE RELEASE VERSION ON CURSEFORGE.  THE LUA LISTED HE
 
 Features for next version:
 * Revisit audit log now that sync is working
-* RL Tools detects when group/raid members aren't on the DKP table for buttons
-* Cap Balance at 300
-* ML Scorecard reset/filter to add non dkp table users to ML list
 
 
 Outstanding bugs:
@@ -18,6 +15,7 @@ Outstanding bugs:
 * Add button also needs clicked twice (once for defocus and once to activate)
 * ML Scorecard needs reset to pull names rather than onload
 * Inviter shows "In your group 0" when not grouped (cosmetic)
+* Hide in group should not remove checked names from summary on Inviter
   
 
 Ideas for future releases (significant work):
@@ -27,6 +25,16 @@ Ideas for future releases (significant work):
 
 
 
+1.3.69 Changelog
+-------------------------------------------------------------
+Added features:
+* (Done) Balance capped at 300
+* (Done) Capped 300 now colours purple
+* (Done) ML Scorecard reset/filter to add non dkp table users to ML list
+* (Done) RL Tools detects when group/raid members aren't on the DKP table for buttons
+
+Bugs Squashed:
+* (Fixed) Balance calculations sorted on table and whispers
 
 
 1.2.69 Changelog
