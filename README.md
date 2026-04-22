@@ -5,7 +5,38 @@ IS ADDON CURRENTLY SAFE TO USE : YES
 NOTE - YOU SHOULD ONLY USE THE RELEASE VERSION ON CURSEFORGE.  THE LUA LISTED HERE IS IN DEVELOPMENT
 
 
-Missing functionality from 1.0.69:
+Features for next version:
+* Revisit audit log now that sync is working
+* RL Tools detects when group/raid members aren't on the DKP table for buttons
+
+
+Outstanding bugs:
+* Force sync to Lunatic did not show her accept in summary (cosmetic)
+* Double check summary info on inviter is counting tanks properly
+* Add button also needs clicked twice (once for defocus and once to activate)
+* ML Scorecard needs reset to pull names rather than onload
+* Inviter shows "In your group 0" when not grouped (cosmetic)
+  
+
+Ideas for future releases (significant work):
+* Colour coding in the logs to make them easier to read
+* Full support for DKP bidding
+* Raid group planner
+
+
+
+
+
+1.2.69 Changelog
+-------------------------------------------------------------
+Bugs Squashed:
+* (Done) ML Scorecard group/raid filter was broken
+
+
+1.1.69 Changelog
+-------------------------------------------------------------
+
+Added features:
 * (Done) Master switch to turn SYNC off on Editors page
 * (Done) Option for the Editors tab that shows how many known addon users. Also fixed that the addon wasn't storing data for addon users properly.
 * (Done) Option on the RL tools tab that selects raid members
@@ -18,33 +49,17 @@ Missing functionality from 1.0.69:
 * (Done) Toggle for Inviter to also show online guildies who aren't on dkp table
 * (Done) Enhance Inviter information and list to clearly show who's offline or in group
 * (Done) Inactive user option for dkp table (biggie)
-* Revisit audit log now that sync is working
-* RL Tools detects when group/raid members aren't on the DKP table for buttons
 
-Known Minor Bugs:
-* Add button also needs clicked twice (once for defocus and once to activate)
+
+Bugs Squashed:
+
 * (Fixed) DKP table headers cutoff?  (Rotation)
-* Force sync to Lunatic did not show her accept in summary (cosmetic)
-* Double check summary info on inviter is counting tanks properly
 * (Fixed) When not in group you are not missing in inviter, and ML scorecard shows blank
 * Editors moving to alts will allow their DKP table to be overridden by other editors because they now fall into the autosync rule.  Workaround is they do not use addon on alts.
-* ML Scorecard needs reset to pull names rather than onload
-* Inviter shows "In your group 0" when not grouped (cosmetic)
 
-Showstopper Bugs:
+Showstopper Bugs Squashed:
 * (Fixed) The "Show hidden records" and "Show current raid members" options on DKP tab has the old bug where it hides table rows at the end of the list.  Ultimately the DKP table has a redraw logic issue that prevents the table refreshing correctly, likely due to duplication of process or incorrect recycling of assets.  Thankfully it doesn't impact the data at all it's just a view issue that seems to get worse when you use more filters/sorting.
 * (Fixed) Lock/Unlock funtionality has made names field unable to be edited
-
-
-For future releases:
-* Colour coding in the logs to make them easier to read
-* More buttons for RL Tools
-* Full support for DKP bidding
-* Raid group planner
-
-
-
-
 
 
 PRE RELEASE ARCHIVE
