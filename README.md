@@ -5,8 +5,10 @@ IS ADDON CURRENTLY SAFE TO USE : YES
 NOTE - YOU SHOULD ONLY USE THE RELEASE VERSION ON CURSEFORGE.  THE LUA LISTED HERE IS IN DEVELOPMENT
 
 
-Features for next version:
+Features to deliver ASAP:
 * Revisit audit log now that sync is working
+* Redo the way DKP table saves to a single button commit, with a rollback to a backup copy of data
+* Better handling for 2 editors at the same time (wasn't original scope)
 
 
 Outstanding bugs:
