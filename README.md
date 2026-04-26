@@ -9,13 +9,15 @@ Features to deliver ASAP:
 * Revisit audit log now that sync is working
 * Redo the way DKP table saves to a single button commit, with a rollback to a backup copy of data
 * Better handling for 2 editors at the same time (wasn't original scope)
+* Add flag on DKP table to show alts
+* Replace SYNC summary with the one from GuildCrafting
+
 
 
 Outstanding bugs:
 * Force sync to Lunatic did not show her accept in summary (cosmetic)
 * Double check summary info on inviter is counting tanks properly
 * Add button also needs clicked twice (once for defocus and once to activate)
-* ML Scorecard needs reset to pull names rather than onload
 * Inviter shows "In your group 0" when not grouped (cosmetic)
 * Hide in group should not remove checked names from summary on Inviter
   
@@ -24,6 +26,25 @@ Ideas for future releases (significant work):
 * Colour coding in the logs to make them easier to read
 * Full support for DKP bidding
 * Raid group planner
+
+
+
+
+
+
+
+1.4.69 Changelog
+------------------------------------------------------------
+Added features:
+* New Alt Tracker tab!
+* Add ALT columns to ML Scorecard
+* Ml Scorecard list now auto filters non guild members
+
+Bugs Squashed:
+* ML Scorecard loads names without needing reset
+
+
+
 
 
 
