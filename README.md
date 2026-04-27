@@ -17,6 +17,8 @@ Outstanding bugs:
 * Force sync to Lunatic did not show her accept in summary (cosmetic)
 * Add button also needs clicked twice (once for defocus and once to activate)
 * Sync tooltip data not retained after logoff
+* Escape does not close the addon (not really a bug - QOL)
+* Window wont move with ML Scorecard open
   
 
 Ideas for future releases (significant work):
