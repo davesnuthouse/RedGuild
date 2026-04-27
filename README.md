@@ -26,6 +26,7 @@ Ideas for future releases (significant work):
 * Colour coding in the logs to make them easier to read
 * Full support for DKP bidding
 * Raid group planner
+* Tactics
 
 
 
