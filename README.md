@@ -10,7 +10,6 @@ Features to deliver ASAP:
 * Redo the way DKP table saves to a single button commit, with a rollback to a backup copy of data
 * Better handling for 2 editors at the same time (wasn't original scope)
 * Add flag on DKP table to show alts
-* Replace SYNC summary with the one from GuildCrafting
 
 
 Outstanding bugs:
@@ -36,7 +35,11 @@ Ideas for future releases (significant work):
 Added features:
 * New Alt Tracker tab!
 * Add ALT columns to ML Scorecard
+* Ml Scorecard formatting puts Mains at the top and Alts at the bottom (looks better)
 * Ml Scorecard list now auto filters non guild members
+* Inviter uses ALT data in info
+* New (totally not stolen) SYNC display in the toolbar
+
 
 Bugs Squashed:
 * ML Scorecard loads names without needing reset
