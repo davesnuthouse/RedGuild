@@ -19,7 +19,6 @@ Outstanding bugs:
 * Sync tooltip data not retained after logoff
 * Escape does not close the addon (not really a bug - QOL)
 * Window wont move with ML Scorecard open
-* Remove buttons showing for everyone
   
 
 Ideas for future releases (significant work):
@@ -44,6 +43,7 @@ Added features:
 * Inviter uses ALT data in info
 * New (totally not stolen) SYNC display in the toolbar
 * Add flag on DKP table to show alts
+* Right click minimap now opens ML table
 
 
 Bugs Squashed:
