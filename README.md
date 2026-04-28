@@ -9,16 +9,18 @@ Features to deliver ASAP:
 * Revisit audit log now that sync is working
 * Redo the way DKP table saves to a single button commit, with a rollback to a backup copy of data
 * Better handling for 2 editors at the same time (wasn't original scope)
-* Use alt data for editors to make alts follow editor behavior?
+* (Risky) Use alt data for editors to make alts follow editor behavior?
+* On editor tab (or sync tooltip) show all editor table versions
 
 
 
 Outstanding bugs:
 * Force sync to Lunatic did not show her accept in summary (cosmetic)
 * Add button also needs clicked twice (once for defocus and once to activate)
-* Sync tooltip data not retained after logoff
 * Escape does not close the addon (not really a bug - QOL)
 * Window wont move with ML Scorecard open
+* ML notes needs 2 clicks
+  
   
 
 Ideas for future releases (significant work):
@@ -44,6 +46,7 @@ Added features:
 * New (totally not stolen) SYNC display in the toolbar
 * Add flag on DKP table to show alts
 * Right click minimap now opens ML table
+* Escape closes the addon again (it's the little things right)
 
 
 Bugs Squashed:
