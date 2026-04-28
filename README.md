@@ -17,7 +17,7 @@ Features to deliver ASAP:
 Outstanding bugs:
 * Force sync to Lunatic did not show her accept in summary (cosmetic)
 * Add button needs clicked twice (once for defocus and once to activate)
-* ML notes needs 2 clicks
+
   
   
 
@@ -53,6 +53,7 @@ Bugs Squashed:
 * Hide in group should not remove checked names from summary on Inviter
 * Window wont move with ML Scorecard open
 * Escape does not close the addon (not really a bug - QOL)
+* * ML notes needs 2 clicks
 
 
 
