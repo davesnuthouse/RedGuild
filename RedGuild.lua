@@ -1,5 +1,5 @@
 -- RedGuild.lua
--- Distributed DKP system with editors, audit log, smart sync, and auto-sync for non-editors.
+-- Guild tool packed with features to assist with group/raid creation.
 if ... ~= "RedGuild" then return end
 
 RedGuild_Data   	= RedGuild_Data   or {}
@@ -11,7 +11,7 @@ RedGuild_Audit  	= RedGuild_Audit  or {}
 RedGuild_Usage  	= RedGuild_Usage  or {}
 
 local addonName      = ...
-local REDGUILD_VERSION = "1.3.69"
+local REDGUILD_VERSION = "1.4.69"
 
 local REDGUILD_CHAT_PREFIX = "REDGUILD"
 
@@ -24,14 +24,15 @@ RedGuild_Config.hideMeFromSync = RedGuild_Config.hideMeFromSync or false
 RedGuild_Usage = RedGuild_Usage or {}
 RedGuild_SyncLocked = true
 
-RedGuild_LastVersionSync = RedGuild_LastVersionSync or "Never"
-RedGuild_LastDKPSync     = RedGuild_LastDKPSync     or "Never"
-RedGuild_LastAltSync     = RedGuild_LastAltSync     or "Never"
-RedGuild_LastEditorSync  = RedGuild_LastEditorSync  or "Never"
-RedGuild_LastVersionSyncFrom = RedGuild_LastVersionSyncFrom or "?"
-RedGuild_LastDKPSyncFrom     = RedGuild_LastDKPSyncFrom     or "?"
-RedGuild_LastAltSyncFrom     = RedGuild_LastAltSyncFrom     or "?"
-RedGuild_LastEditorSyncFrom  = RedGuild_LastEditorSyncFrom  or "?"
+RedGuild_Config.lastVersionSync     = RedGuild_Config.lastVersionSync     or "Never"
+RedGuild_Config.lastVersionSyncFrom = RedGuild_Config.lastVersionSyncFrom or "?"
+RedGuild_Config.lastDKPSync         = RedGuild_Config.lastDKPSync         or "Never"
+RedGuild_Config.lastDKPSyncFrom     = RedGuild_Config.lastDKPSyncFrom     or "?"
+RedGuild_Config.lastAltSync         = RedGuild_Config.lastAltSync         or "Never"
+RedGuild_Config.lastAltSyncFrom     = RedGuild_Config.lastAltSyncFrom     or "?"
+RedGuild_Config.lastEditorSync      = RedGuild_Config.lastEditorSync      or "Never"
+RedGuild_Config.lastEditorSyncFrom  = RedGuild_Config.lastEditorSyncFrom  or "?"
+
 
 RedGuild_Config.altsVersion = RedGuild_Config.altsVersion or 0
 
@@ -72,6 +73,7 @@ REDGUILD_Inbound = REDGUILD_Inbound or {
     DATA      = {},
     EDITORSYNC = {},
     FORCE_REQ = {},
+	ALTS       = {},
 }
 
 
@@ -124,29 +126,99 @@ end
 -- SYNC HELPERS
 --------------------------------------------------
 
+local function GetSyncAgeState(timestamp)
+    if not timestamp or timestamp == "Never" then
+        return "red"
+    end
+
+    local year, month, day, hour, min, sec =
+        timestamp:match("(%d+)%-(%d+)%-(%d+) (%d+):(%d+):(%d+)")
+
+    if not year then
+        return "red"
+    end
+
+    local t = time({
+        year = year,
+        month = month,
+        day = day,
+        hour = hour,
+        min = min,
+        sec = sec,
+    })
+
+    local ageDays = (time() - t) / 86400
+
+    if ageDays < 4 then
+        return "green"
+    elseif ageDays < 7 then
+        return "orange"
+    else
+        return "red"
+    end
+end
+
 function UpdateSyncStatus()
     if not statusBox or not statusText then return end
 
-    local r, g, b = 0.5, 0.5, 0.5
-
     -- PRIORITY 1: Hidden from sync (blue)
     if RedGuild_Config.hideMeFromSync then
-        r, g, b = 0, 0, 1
-
-    -- PRIORITY 2: Fully connected (green)
-    elseif RedGuild_Connected then
-        r, g, b = 0, 1, 0
-
-    -- PRIORITY 3: Partial sync (yellow)
-    elseif RedGuild_Partial then
-        r, g, b = 1, 1, 0
-
-    -- PRIORITY 4: Disconnected (red)
-    else
-        r, g, b = 1, 0, 0
+        statusBox:SetColorTexture(0, 0, 1)
+        return
     end
 
-    statusBox:SetColorTexture(r, g, b)
+    -- Determine freshness of each sync type
+    local dkpState 	      = GetSyncAgeState(RedGuild_Config.lastDKPSync)
+    local altState  	  = GetSyncAgeState(RedGuild_Config.lastAltSync)
+    local editorState 	  = GetSyncAgeState(RedGuild_Config.lastEditorSync)
+
+    -- If ANY are red → red
+    if dkpState == "red" or altState == "red" or editorState == "red" then
+        statusBox:SetColorTexture(1, 0, 0)
+        return
+    end
+
+    -- If ANY are orange → orange
+    if dkpState == "orange" or altState == "orange" or editorState == "orange" then
+        statusBox:SetColorTexture(1, 0.65, 0)
+        return
+    end
+
+    -- Otherwise all are green → green
+    statusBox:SetColorTexture(0, 1, 0)
+end
+
+local function ColourForSyncAge(timestamp)
+    if not timestamp or timestamp == "Never" then
+        return "|cffff0000Never|r" -- treat missing as red
+    end
+
+    -- Parse "YYYY-MM-DD HH:MM:SS"
+    local year, month, day, hour, min, sec =
+        timestamp:match("(%d+)%-(%d+)%-(%d+) (%d+):(%d+):(%d+)")
+
+    if not year then
+        return "|cffff0000Invalid|r"
+    end
+
+    local t = time({
+        year = year,
+        month = month,
+        day = day,
+        hour = hour,
+        min = min,
+        sec = sec,
+    })
+
+    local ageDays = (time() - t) / 86400
+
+    if ageDays < 4 then
+        return "|cff00ff00" .. timestamp .. "|r" -- green
+    elseif ageDays < 7 then
+        return "|cffffa500" .. timestamp .. "|r" -- orange
+    else
+        return "|cffff0000" .. timestamp .. "|r" -- red
+    end
 end
 
 local function GetExactName(name)
@@ -241,7 +313,8 @@ function RedGuild_Send(msgType, payload, target)
 	local isChunked =
 		msgType == "DATA" or
 		msgType == "EDITORSYNC" or
-		msgType == "FORCE_REQ"
+		msgType == "FORCE_REQ" or
+		msgType == "ALTS"		
 
 	-- ALT SYNC MESSAGES ARE ALWAYS SMALL
 	if not isChunked then
@@ -1758,7 +1831,20 @@ function UpdateTable()
                 displayName = "|cffff0000-|r " .. displayName
             end
 
-            row.cols[1].fs:SetText(classColor .. displayName .. "|r")
+			local isAlt = RedGuild_AltParent[name] and RedGuild_AltParent[name] ~= name
+
+			local displayName = name
+
+			if RuntimeInvalid(name) then
+				displayName = "|cffff0000-|r " .. displayName
+			end
+
+			if isAlt then
+				displayName = "~" .. displayName
+			end
+
+			
+			row.cols[1].fs:SetText(classColor .. displayName .. "|r")
             row.cols[2].icon:SetTexture(SPEC_ICONS[d.msRole] or "Interface\\Icons\\INV_Misc_QuestionMark")
             row.cols[3].icon:SetTexture(SPEC_ICONS[d.osRole] or "Interface\\Icons\\INV_Misc_QuestionMark")
 
@@ -1957,6 +2043,19 @@ local function CreateUI()
     mainFrame:SetPoint("CENTER")
     mainFrame:Hide()
 	mainFrame:SetFrameLevel(666)
+	
+	mainFrame:SetMovable(true)
+	mainFrame:EnableMouse(true)
+	mainFrame:RegisterForDrag("LeftButton")
+	mainFrame:SetScript("OnDragStart", function(self)
+		self:StartMoving()
+	end)
+	
+	mainFrame:SetScript("OnDragStop", function(self)
+		self:StopMovingOrSizing()
+	end)
+	
+	table.insert(UISpecialFrames, "RedGuildFrame")
 
     local headerIcon = mainFrame:CreateTexture(nil, "OVERLAY", nil, 7)
     headerIcon:SetTexture("Interface\\AddOns\\RedGuild\\media\\RedGuild_Icon256.png")
@@ -1997,11 +2096,6 @@ syncButton:SetScript("OnEnter", function()
     GameTooltip:AddLine("|cffffff00Sync Status|r")
     GameTooltip:AddLine(" ")
 
-    -- Status
-    local hidden = RedGuild_Config.hideMeFromSync and " (hidden)" or ""
-    local status = RedGuild_Connected and "|cff00ff00Connected|r" or "|cffff0000Disconnected|r"
-    GameTooltip:AddLine("Status: " .. status .. hidden)
-
 	-- Addon users
 	local total = CountKeys(RedGuild_Config.addonUsers or {})
 
@@ -2012,32 +2106,32 @@ syncButton:SetScript("OnEnter", function()
 		end
 	end
 
-	GameTooltip:AddLine("Addon users: " .. online .. " / " .. total)
+	GameTooltip:AddLine("|cffffffffAddon users: |r" .. online .. " / " .. total)
 
     GameTooltip:AddLine(" ")
 
     -- Version sync
     GameTooltip:AddLine("|cffffff00Version Sync|r")
-    GameTooltip:AddLine("Last: " .. (RedGuild_LastVersionSync or "Never"))
-    GameTooltip:AddLine("From: " .. (RedGuild_LastVersionSyncFrom or "?"))
+    GameTooltip:AddLine("|cffffffffLast: |r" .. ColourForSyncAge(RedGuild_Config.lastVersionSync or "Never"))
+    GameTooltip:AddLine("|cffffffffFrom: |r" .. (RedGuild_Config.lastVersionSyncFrom or "?"))
     GameTooltip:AddLine(" ")
 
-    -- DKP sync
-    GameTooltip:AddLine("|cffffff00DKP Sync|r")
-    GameTooltip:AddLine("Last: " .. (RedGuild_LastDKPSync or "Never"))
-    GameTooltip:AddLine("From: " .. (RedGuild_LastDKPSyncFrom or "?"))
-    GameTooltip:AddLine(" ")
+-- DKP sync
+GameTooltip:AddLine("|cffffff00DKP Sync|r")
+GameTooltip:AddLine("|cffffffffLast: |r" .. ColourForSyncAge(RedGuild_Config.lastDKPSync or "Never"))
+GameTooltip:AddLine("|cffffffffFrom: |r" .. (RedGuild_Config.lastDKPSyncFrom or "?"))
+GameTooltip:AddLine(" ")
 
-    -- Alt sync
-    GameTooltip:AddLine("|cffffff00Alt Tracker Sync|r")
-    GameTooltip:AddLine("Last: " .. (RedGuild_LastAltSync or "Never"))
-    GameTooltip:AddLine("From: " .. (RedGuild_LastAltSyncFrom or "?"))
-    GameTooltip:AddLine(" ")
+-- Alt sync
+GameTooltip:AddLine("|cffffff00Alt Tracker Sync|r")
+GameTooltip:AddLine("|cffffffffLast: |r" .. ColourForSyncAge(RedGuild_Config.lastAltSync or "Never"))
+GameTooltip:AddLine("|cffffffffFrom: |r" .. (RedGuild_Config.lastAltSyncFrom or "?"))
+GameTooltip:AddLine(" ")
 
-    -- Editor sync
-    GameTooltip:AddLine("|cffffff00Editor Sync|r")
-    GameTooltip:AddLine("Last: " .. (RedGuild_LastEditorSync or "Never"))
-    GameTooltip:AddLine("From: " .. (RedGuild_LastEditorSyncFrom or "?"))
+-- Editor sync
+GameTooltip:AddLine("|cffffff00Editor Sync|r")
+GameTooltip:AddLine("|cffffffffLast: |r" .. ColourForSyncAge(RedGuild_Config.lastEditorSync or "Never"))
+GameTooltip:AddLine("|cffffffffFrom: |r" .. (RedGuild_Config.lastEditorSyncFrom or "?"))
 
     GameTooltip:Show()
 end)
@@ -2539,7 +2633,7 @@ end
             local row = rightPanel.altRows[i]
             local c = GetClassColor(alt)
             row.nameFS:SetText(c .. alt .. "|r")
-			
+		
 			if IsEditor(GetPlayerName()) then
 				row.setMainBtn:Show()
 			else
@@ -2552,6 +2646,15 @@ end
 				RefreshMainsList()
 				UpdateTopBar()
 			end)
+			
+			local viewer = GetPlayerName()
+			local parent = RedGuild_AltParent[alt]
+
+			if IsEditor(viewer) or (parent == viewer) then
+				row.removeBtn:Show()
+			else
+				row.removeBtn:Hide()
+			end
 
             row.removeBtn:SetScript("OnClick", function()
                 -- Remove alt
@@ -2705,16 +2808,20 @@ local function InitMainSelectDropdown(self, level)
             local info = UIDropDownMenu_CreateInfo()
             info.text = name
             info.func = function()
-                -- When a main is chosen, we finally write to storage
-                AssignAlt(player, name)
+    if AssignAlt(player, name) then
+        -- Version bump
+        RedGuild_Config.altsVersion = (RedGuild_Config.altsVersion or 0) + 1
 
-                -- Clear pending state
-                PendingAlt = nil
+        -- Broadcast the change
+        BroadcastAltFieldUpdate("AltParent", { alt = player, main = name })
+        BroadcastAltFieldUpdate("AddAltToMain", { main = name, alt = player })
+    end
 
-                RefreshMainsList()
-                rightPanel.update()
-                UpdateTopBar()
-            end
+    PendingAlt = nil
+    RefreshMainsList()
+    rightPanel.update()
+    UpdateTopBar()
+end
             UIDropDownMenu_AddButton(info)
         end
     end
@@ -3474,6 +3581,25 @@ local headers = {
     local content = CreateFrame("Frame", nil, scroll)
     content:SetSize(1, 1)
     scroll:SetScrollChild(content)
+	
+	------------------------------------------------------------
+	-- FIX: Prevent ScrollFrame from blocking window dragging
+	------------------------------------------------------------
+	scroll:EnableMouse(false)
+	content:EnableMouse(false)
+
+	-- Disable mouse on scrollbar + buttons if they exist
+	local sb = scroll.ScrollBar
+	if sb then
+		sb:EnableMouse(false)
+		if sb.ScrollUpButton then sb.ScrollUpButton:EnableMouse(false) end
+		if sb.ScrollDownButton then sb.ScrollDownButton:EnableMouse(false) end
+	end
+
+	-- Some UIPanelScrollFrameTemplates include a background texture
+	if scroll.Background then
+		scroll.Background:EnableMouse(false)
+	end
 
 local COL_NAME     = 1
 local COL_MAIN_MS  = 2
@@ -3814,10 +3940,15 @@ local function makeMLHandler(field)
     end
 end
 
-mainMSBtn:SetScript("OnMouseDown", makeMLHandler("mlMainMS"))
-altMSBtn:SetScript("OnMouseDown",  makeMLHandler("mlAltMS"))
-mainOSBtn:SetScript("OnMouseDown", makeMLHandler("mlMainOS"))
-altOSBtn:SetScript("OnMouseDown",  makeMLHandler("mlAltOS"))
+mainMSBtn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+altMSBtn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+mainOSBtn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+altOSBtn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+
+mainMSBtn:SetScript("OnClick", makeMLHandler("mlMainMS"))
+altMSBtn:SetScript("OnClick",  makeMLHandler("mlAltMS"))
+mainOSBtn:SetScript("OnClick", makeMLHandler("mlMainOS"))
+altOSBtn:SetScript("OnClick",  makeMLHandler("mlAltOS"))
 
     ------------------------------------------------------------
     -- NOTES EDIT
@@ -3841,7 +3972,10 @@ altOSBtn:SetScript("OnMouseDown",  makeMLHandler("mlAltOS"))
         inlineEditML:SetWidth(self:GetWidth() - 4)
         inlineEditML:SetText(ml.mlNotes or "")
         inlineEditML:HighlightText()
-        inlineEditML:SetFocus()
+        C_Timer.After(0, function()
+			inlineEditML:SetFocus()
+		end)
+		inlineEditML:SetCursorPosition(strlen(inlineEditML:GetText()))
 
         inlineEditML.currentFS = fs
         inlineEditML.cancelled = false
@@ -3965,14 +4099,6 @@ end)
 ----------------------------------------------------------------
 mlPanel:SetScript("OnShow", function()
     RefreshMLTools()
-end)
-
-----------------------------------------------------------------
--- PANEL CLICK → COMMIT INLINE EDIT
-----------------------------------------------------------------
-mlPanel:EnableMouse(true)
-mlPanel:SetScript("OnMouseDown", function()
-    CommitInlineML()
 end)
 
 ----------------------------------------------------------------
@@ -4499,7 +4625,6 @@ versionEdit:SetPoint("LEFT", versionLabel, "RIGHT", 10, 0)
 -- Load current version when panel is shown
 editorsPanel:HookScript("OnShow", function()
     local online = CountOnlineAddonUsers()
-    addonOnlineFS:SetText("Addon users online: " .. online)
     versionEdit:SetText(tostring(RedGuild_Config.dkpVersion or 0))
 end)
 
@@ -4556,13 +4681,6 @@ hideSyncChk:SetScript("OnClick", function(self)
     RedGuild_Config.hideMeFromSync = self:GetChecked() and true or false
 end)
 
-------------------------------------------------------------
--- ADDON USERS ONLINE
-------------------------------------------------------------
-addonOnlineFS = editorsPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-addonOnlineFS:SetPoint("BOTTOMRIGHT", editorsPanel, "BOTTOMRIGHT", -35, 50)
-addonOnlineFS:SetJustifyH("RIGHT")
-addonOnlineFS:SetText("Addon users online: 0")
 
     --------------------------------------------------------------------
     -- AUDIT PANEL
@@ -5178,8 +5296,11 @@ local function ApplyAltSnapshot(snapshot)
     local incoming = tonumber(snapshot.version or 0)
     local localVer = tonumber(RedGuild_Config.altsVersion or 0)
 
-    if incoming < localVer then return end
+-- Alt tracker sync should always merge incoming data
+-- Version is informational only, not authoritative
+if incoming > localVer then
     RedGuild_Config.altsVersion = incoming
+end
 
     for alt, main in pairs(snapshot.AltParent or {}) do
         if alt ~= main then
@@ -5271,9 +5392,11 @@ local function ApplySyncData(sender, encoded)
 	local incoming = tonumber(payload.version or 0)
 	local localVer = tonumber(RedGuild_Config.dkpVersion or 0)
 
-	if incoming <= localVer then
-		SafeSetSyncWarning("Ignored older DKP sync.")
-		return
+	if not IsEditor(UnitName("player")) then
+		if incoming <= localVer then
+			SafeSetSyncWarning("Ignored older DKP sync.")
+			return
+		end
 	end
 	
 	RedGuild_Config.dkpVersion = incoming
@@ -5800,13 +5923,14 @@ local LDB = LibStub("LibDataBroker-1.1"):NewDataObject("RedGuild", {
 
         elseif button == "RightButton" then
             mainFrame:Show()
-            ShowTab(TAB_DKP)
+            ShowTab(TAB_ML)
         end
     end,
 
     OnTooltipShow = function(tt)
         tt:AddLine("RedGuild")
         tt:AddLine("|cff00ff00Left-click|r to open DKP")
+		tt:AddLine("|cff00ff00Right-click|r to open ML")
     end,
 })
 
@@ -5994,7 +6118,7 @@ if event == "CHAT_MSG_ADDON" then
         msg:match("^([^:]+):([^:]+):(%d+):(%d+):(%d+):(.*)$")
 
     if pfx2 == REDGUILD_CHAT_PREFIX
-       and (chunkType == "DATA" or chunkType == "EDITORSYNC" or chunkType == "FORCE_REQ")
+       and (chunkType == "DATA" or chunkType == "EDITORSYNC" or chunkType == "FORCE_REQ" or chunkType == "ALTS")
     then
         local seq   = tonumber(seqStr)
         local part  = tonumber(partStr)
@@ -6027,11 +6151,28 @@ if event == "CHAT_MSG_ADDON" then
             -------------------------------------------------
             if chunkType == "DATA" then
                 ApplySyncData(entry.from or sender, full)
-				RedGuild_LastDKPSync     = date("%Y-%m-%d %H:%M")
-				RedGuild_LastDKPSyncFrom = entry.from or sender
+				RedGuild_Config.lastDKPSync = date("%Y-%m-%d %H:%M:%S")
+				RedGuild_Config.lastDKPSyncFrom = sender
 				UpdateSyncStatus()
                 return
             end
+			
+			-------------------------------------------------
+			-- ALT SNAPSHOT (CHUNKED ALTS_DATA)
+			-------------------------------------------------
+			if chunkType == "ALTS" then
+				local ok, snapshot = pcall(DecodePayload, full)
+				if ok then
+					ApplyAltSnapshot(snapshot)
+					RefreshMainsList()
+					UpdateTopBar()
+				end
+
+				RedGuild_Config.lastAltSync     = date("%Y-%m-%d %H:%M:%S")
+				RedGuild_Config.lastAltSyncFrom = sender
+				UpdateSyncStatus()
+				return
+			end
 
             -------------------------------------------------
             -- EDITOR LIST SYNC
@@ -6044,8 +6185,8 @@ if event == "CHAT_MSG_ADDON" then
                 local ok, tbl = LibSerialize:Deserialize(decompressed)
                 if not ok or type(tbl) ~= "table" then return end
                 ApplyEditorList(tbl)
-				RedGuild_LastEditorSync     = date("%Y-%m-%d %H:%M")
-				RedGuild_LastEditorSyncFrom = entry.from or sender
+				RedGuild_Config.lastEditorSync = date("%Y-%m-%d %H:%M:%S")
+				RedGuild_Config.lastEditorSyncFrom = sender
 				UpdateSyncStatus()
                 return
             end
@@ -6078,8 +6219,8 @@ if event == "CHAT_MSG_ADDON" then
                     ApplyDKPSnapshot(snapshot)
                     UpdateTable()
                     SafeSetSyncWarning("")
-                    RedGuild_LastDKPSync     = date("%Y-%m-%d %H:%M")
-					RedGuild_LastDKPSyncFrom = editor
+					RedGuild_Config.lastDKPSync = date("%Y-%m-%d %H:%M:%S")
+					RedGuild_Config.lastDKPSyncFrom = editor
                     UpdateSyncStatus()
 
                     RedGuild_Send("FORCE_ACCEPT", UnitName("player"), editor)
@@ -6105,15 +6246,19 @@ if event == "CHAT_MSG_ADDON" then
 
     if pfx3 == REDGUILD_CHAT_PREFIX then
         -- ALT SYNC: REQUEST SNAPSHOT
-        if altType == "ALTS_REQ" then
-            local requester = altPayload
-            if requester and requester ~= "" then
-                local snapshot = BuildAltSnapshot()
-                local encoded  = EncodePayload(snapshot)
-                RedGuild_Send("ALTS_DATA", encoded, requester)
-            end
-            return
-        end
+if altType == "ALTS_REQ" then
+    local requester = altPayload
+    if not requester or requester == "" then
+        requester = sender
+    end
+
+    local snapshot = BuildAltSnapshot()
+    local encoded  = EncodePayload(snapshot)
+
+    -- send via chunked path
+    RedGuild_Send("ALTS", encoded, requester)
+    return
+end
 
         -- ALT SYNC: RECEIVE SNAPSHOT
         if altType == "ALTS_DATA" then
@@ -6123,8 +6268,8 @@ if event == "CHAT_MSG_ADDON" then
                 RefreshMainsList()
                 UpdateTopBar()
             end
-			RedGuild_LastAltSync     = date("%Y-%m-%d %H:%M")
-			RedGuild_LastAltSyncFrom = sender
+			RedGuild_Config.lastAltSync     = date("%Y-%m-%d %H:%M:%S")
+			RedGuild_Config.lastAltSyncFrom = sender
 			UpdateSyncStatus()
             return
         end
@@ -6137,8 +6282,8 @@ if event == "CHAT_MSG_ADDON" then
                 RefreshMainsList()
                 UpdateTopBar()
             end
-            RedGuild_LastAltSync     = date("%Y-%m-%d %H:%M")
-			RedGuild_LastAltSyncFrom = sender
+            RedGuild_Config.lastAltSync     = date("%Y-%m-%d %H:%M:%S")
+			RedGuild_Config.lastAltSyncFrom = sender
 			UpdateSyncStatus()
 			return
         end
@@ -6188,19 +6333,26 @@ if event == "CHAT_MSG_ADDON" then
 		return
     end
 
-    if simpleType == "VERSIONREP" then
-        local remoteVer = simplePayload or ""
-        if remoteVer ~= "" and CompareVersions(REDGUILD_VERSION, remoteVer) then
-            if not RedGuild_Config.seenNewerVersion then
-                RedGuild_Config.seenNewerVersion = true
-                Print(string.format(
-                    "A newer RedGuild version is available: %s (you are on %s)",
-                    remoteVer, REDGUILD_VERSION
-                ))
-            end
+if simpleType == "VERSIONREP" then
+    local remoteVer = simplePayload or ""
+
+    -- Track version sync for tooltip
+    RedGuild_Config.lastVersionSync = date("%Y-%m-%d %H:%M:%S")
+    RedGuild_Config.lastVersionSyncFrom = sender
+    UpdateSyncStatus()
+
+    if remoteVer ~= "" and CompareVersions(REDGUILD_VERSION, remoteVer) then
+        if not RedGuild_Config.seenNewerVersion then
+            RedGuild_Config.seenNewerVersion = true
+            Print(string.format(
+                "A newer RedGuild version is available: %s (you are on %s)",
+                remoteVer, REDGUILD_VERSION
+            ))
         end
-        return
     end
+
+    return
+end
 end
 
 ---------------------------------------------------------
