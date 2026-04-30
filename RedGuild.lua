@@ -2380,7 +2380,7 @@ mainSelectDrop:Hide()
 ----------------------------------------------------------------
 leftPanel.addMainBtn = CreateFrame("Button", nil, leftPanel, "UIPanelButtonTemplate")
 leftPanel.addMainBtn:SetSize(100, 22)
-leftPanel.addMainBtn:SetPoint("BOTTOMLEFT", 10, 10)
+leftPanel.addMainBtn:SetPoint("BOTTOMLEFT", 20, -30)
 leftPanel.addMainBtn:SetText("Add Main")
 
 leftPanel.addMainInput = CreateFrame("EditBox", nil, leftPanel, "InputBoxTemplate")
@@ -2950,7 +2950,7 @@ end
     ----------------------------------------------------------------
     rightPanel.addAltBtn = CreateFrame("Button", nil, rightPanel, "UIPanelButtonTemplate")
     rightPanel.addAltBtn:SetSize(100, 22)
-    rightPanel.addAltBtn:SetPoint("BOTTOMLEFT", 10, 10)
+    rightPanel.addAltBtn:SetPoint("BOTTOMLEFT", 30, -30)
     rightPanel.addAltBtn:SetText("Add Alt")
 	
 	rightPanel.addAltInput = CreateFrame("EditBox", nil, rightPanel, "InputBoxTemplate")
