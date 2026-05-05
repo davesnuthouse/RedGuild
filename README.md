@@ -7,18 +7,15 @@ NOTE - YOU SHOULD ONLY USE THE RELEASE VERSION ON CURSEFORGE.  THE LUA LISTED HE
 
 Features to deliver ASAP:
 * Revisit audit log now that sync is working
-* Redo the way DKP table saves to a single button commit, with a rollback to a backup copy of data
-* Better handling for 2 editors at the same time (wasn't original scope)
-* (Risky) Use alt data for editors to make alts follow editor behavior?
-* On editor tab (or sync tooltip) show all editor table versions
-
+* Redo the way DKP table saves to a single button commit (hook into editor rollback funcitonality)
+* Use alt data for editors to remove their alts from sync (better data integrity)
 
 
 Outstanding bugs:
 * Force sync to Lunatic did not show her accept in summary (cosmetic)
 * Add button needs clicked twice (once for defocus and once to activate)
-
-  
+* DKP table version display / update not all there (editors only)
+* Lagspikes when users log in ?
   
 
 Ideas for future releases (significant work):
@@ -33,12 +30,17 @@ Ideas for future releases (significant work):
 
 
 
+1.6.69 Changelog
+-------------------------------------------------------
+Added features:
+* Editor to Editor sync now makes a backup table that can be restored
+* Editor sync now happens from the editor with the highest dkp table version rather than highest rank
 
 
-
-
-
-
+Bugs squashed:
+* Fixed bad sync between editors
+* Sync info now correctly shows editor syncs
+* Editor sync now updates the dkp table version number properly
 
 
 
