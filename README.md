@@ -16,8 +16,7 @@ Features to deliver ASAP:
 
 
 Outstanding bugs:
-* Force sync to Lunatic did not show her accept in summary (cosmetic)
-* Add button needs clicked twice (once for defocus and once to activate)
+* Force sync isnt showing editor response
 * DKP table version display / update not all there (editors only)
 * Check that if force sync is declined or fails, sync information reflects this (maybe add "last sync status"?)
   
