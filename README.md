@@ -12,6 +12,7 @@ Features to deliver ASAP:
 * Redo the way DKP table saves to a single button commit (hook into editor rollback funcitonality)
 * Use alt data for editors to remove their alts from sync (better data integrity)
 * Improve whisper response functionality
+* Table version in sync info
 
 
 Outstanding bugs:
