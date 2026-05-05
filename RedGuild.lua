@@ -2044,6 +2044,10 @@ function RefreshEditorList()
         -- Fetch known version (may be nil)
         local ver = RedGuild_Config.EditorVersions and RedGuild_Config.EditorVersions[name]
 		
+		-- Normalize for version lookup
+        local key = NormalizeName(name)
+        local ver = RedGuild_Config.EditorVersions and RedGuild_Config.EditorVersions[key]
+		
 		-- Build display text
         local display
         if ver then
@@ -2304,9 +2308,10 @@ do
     -- UTILITY: GUILD ROSTER SNAPSHOT
     ----------------------------------------------------------------
     local function BuildGuildRosterList()
-        if C_GuildInfo and C_GuildInfo.GuildRoster then
-            C_GuildInfo.GuildRoster()
-        end
+		--commented out refresh as might be causing lag spikes
+        --if C_GuildInfo and C_GuildInfo.GuildRoster then
+        --    C_GuildInfo.GuildRoster()
+        --end
 
         local names = {}
         local num = GetNumGuildMembers()
@@ -4669,7 +4674,7 @@ end)
 ----------------------------------------------------------------
 versionLabel = editorsPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 versionLabel:SetPoint("BOTTOMRIGHT", editorsPanel, "BOTTOMRIGHT", -100, 20)
-versionLabel:SetText("DKP Table Version:")
+versionLabel:SetText("Your DKP Table Version:")
 
 local versionEdit = CreateFrame("EditBox", nil, editorsPanel, "InputBoxTemplate")
 versionEdit:SetAutoFocus(false)
@@ -4687,6 +4692,8 @@ versionEdit:SetScript("OnEnterPressed", function(self)
     local newVal = tonumber(self:GetText())
     if newVal then
         RedGuild_Config.dkpVersion = newVal
+		local me = NormalizeName(UnitName("player"))
+		RedGuild_Config.EditorVersions[me] = newVal
         Print("|cff00ff00DKP version updated to " .. newVal .. ".|r")
         UpdateTable()
     else
@@ -4700,6 +4707,8 @@ versionEdit:SetScript("OnEditFocusLost", function(self)
     local newVal = tonumber(self:GetText())
     if newVal then
         RedGuild_Config.dkpVersion = newVal
+		local me = NormalizeName(UnitName("player"))
+		RedGuild_Config.EditorVersions[me] = newVal
         UpdateTable()
     end
 end)
@@ -5675,7 +5684,6 @@ StaticPopupDialogs["REDGUILD_FORCE_SYNC_RECEIVE"] = {
             return
         end
 
-		
 		RedGuild_CreateDKPBackup()
 		
 		-- Update DKP version and sync metadata
@@ -5684,6 +5692,10 @@ StaticPopupDialogs["REDGUILD_FORCE_SYNC_RECEIVE"] = {
 
 		RedGuild_Config.lastDKPSync     = date("%Y-%m-%d %H:%M:%S")
 		RedGuild_Config.lastDKPSyncFrom = editor
+		
+		-- Update DKP version and editor version map
+		local incomingVersion = tonumber(RedGuild_PendingForceSync.snapshot.version or 0) or 0
+		RedGuild_Config.dkpVersion = incomingVersion
 
 		-- Update editor version table
 		local key = NormalizeName(editor)
@@ -6117,6 +6129,14 @@ eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4, arg5)
 
         -- Minimap icon
         icon:Register("RedGuild", LDB, RedGuild_Config.minimap)
+		
+		C_Timer.After(1, function()
+			if IsEditor(UnitName("player")) then
+				local me = NormalizeName(UnitName("player"))
+				RedGuild_Config.EditorVersions = RedGuild_Config.EditorVersions or {}
+				RedGuild_Config.EditorVersions[me] = tonumber(RedGuild_Config.dkpVersion or 0)
+			end
+		end)
 
 		-- Patch Blizzard GuildUtil bug (formatString nil)
 		hooksecurefunc("GuildNewsButton_SetText", function(button, text, formatString)
@@ -6140,26 +6160,27 @@ if event == "PLAYER_LOGIN" then
     CheckGuildRestriction()
     CreateUI()
     UpdateOnlineEditors()
-    C_GuildInfo.GuildRoster()
+    -- removed to try improve lag on load
+	--C_GuildInfo.GuildRoster()
 
     EnsureSaved()
     EnsureProtectedEditor()
 
     -- Version handshake: ask guild addon users for their version
-    C_Timer.After(2, function()
+    C_Timer.After(5, function()
         if IsInGuild() then
             RedGuild_Send("VERSIONREQ", UnitName("player"))  -- channel=GUILD
         end
     end)
 
     -- Small delay to let roster/chat settle, then auto-sync
-    C_Timer.After(3, function()
+    C_Timer.After(10, function()
         if not IsInGuild() then return end
         AttemptAutoSync()
     end)
 
     -- Small delay to let roster/chat settle, then sync Alt Tracker Data
-    C_Timer.After(3, function()
+    C_Timer.After(15, function()
         if not IsInGuild() then return end
 		local me = UnitName("player")
 		if me then
@@ -6173,9 +6194,11 @@ if event == "PLAYER_LOGIN" then
     end)
 	
 	-- Periodic sync status refresh (every 10 seconds)
+	if mainFrame and mainFrame:IsShown() then
+        UpdateSyncStatus()
+    end
 	C_Timer.NewTicker(10, function()
     UpdateSyncStatus()
-	end)
 
     return
 end
@@ -6193,7 +6216,9 @@ end
                 if anyName then
                     firstRosterReady = true
                     EnsureProtectedEditor()
-					PopulateGuildClasses()
+					if IsInGuild() and GetNumGuildMembers() > 0 then
+						PopulateGuildClasses()
+					end
                     UpdateTable()
                     RedGuild_SyncLocked = false
                     SafeSetSyncWarning("")
@@ -6459,6 +6484,11 @@ end
     end
 
 if simpleType == "VERSIONREP" then
+
+	-- Normalize sender name
+    local key = NormalizeName(sender)
+	
+	-- Convert version to number
     local remoteVer = simplePayload or ""
 
     -- Track version sync for tooltip
@@ -6468,7 +6498,7 @@ if simpleType == "VERSIONREP" then
 	
 	 -- Store editor version
     if IsEditor(sender) then
-        RedGuild_Config.EditorVersions[sender] = remoteVer
+        RedGuild_Config.EditorVersions[key] = remoteVer
     end
 
     -- Notify user if newer version exists
