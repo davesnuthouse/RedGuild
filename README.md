@@ -11,7 +11,6 @@ Features to deliver ASAP:
 * Revisit audit log now that sync is working
 * Redo the way DKP table saves to a single button commit (hook into editor rollback funcitonality)
 * Use alt data for editors to remove their alts from sync (better data integrity)
-* Improve whisper response functionality
 * Table version in sync info
 
 
@@ -38,6 +37,7 @@ Ideas for future releases (significant work):
 Added features:
 * Editor to Editor sync now makes a backup table that can be restored
 * Editor sync now happens from the editor with the highest dkp table version rather than highest rank
+* Improved whisper response functionality
 
 
 Bugs squashed:
