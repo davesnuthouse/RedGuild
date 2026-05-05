@@ -3,7 +3,7 @@
 ## Author: Lunátic
 ## Version: 1.5.69
 ## Notes: Distributed DKP with audit log, undo, and sync
-## SavedVariables: RedGuild_Data, RedGuild_Config, RedGuild_Audit, RedGuild_ML, RedGuild_Alts, RedGuild_AltParent, RedGuild_Editors
+## SavedVariables: RedGuild_Data, RedGuild_BackupData, RedGuild_Config, RedGuild_Audit, RedGuild_ML, RedGuild_Alts, RedGuild_AltParent, RedGuild_Editors
 ## OptionalDeps: LibStub, LibSerialize, LibDeflate
 
 ## IconTexture: Interface\AddOns\RedGuild\media\RedGuild_Icon.tga
