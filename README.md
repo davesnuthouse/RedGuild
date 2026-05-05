@@ -15,7 +15,6 @@ Outstanding bugs:
 * Force sync to Lunatic did not show her accept in summary (cosmetic)
 * Add button needs clicked twice (once for defocus and once to activate)
 * DKP table version display / update not all there (editors only)
-* Lagspikes when users log in ?
 * Check that if force sync is declined or fails, sync information reflects this (maybe add "last sync status"?)
   
 
@@ -42,6 +41,7 @@ Bugs squashed:
 * Fixed bad sync between editors
 * Sync info now correctly shows editor syncs
 * Editor sync now updates the dkp table version number properly
+* Sweeping changes to addon_loaded, player_login and guild_roster_update to try and reduce lag spikes
 
 
 
