@@ -4,6 +4,8 @@ IS ADDON CURRENTLY SAFE TO USE : YES
 
 NOTE - YOU SHOULD ONLY USE THE RELEASE VERSION ON CURSEFORGE.  THE LUA LISTED HERE IS IN DEVELOPMENT
 
+Required Showstopper function:
+* Prevent out of date editors from syncing at all
 
 Features to deliver ASAP:
 * Revisit audit log now that sync is working
