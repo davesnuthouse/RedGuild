@@ -16,6 +16,7 @@ Outstanding bugs:
 * Add button needs clicked twice (once for defocus and once to activate)
 * DKP table version display / update not all there (editors only)
 * Lagspikes when users log in ?
+* Check that if force sync is declined or fails, sync information reflects this (maybe add "last sync status"?)
   
 
 Ideas for future releases (significant work):
