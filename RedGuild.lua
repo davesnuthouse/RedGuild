@@ -3,6 +3,7 @@
 if ... ~= "RedGuild" then return end
 
 RedGuild_Data   	= RedGuild_Data   or {}
+RedGuild_BackupData = RedGuild_BackupData or {}
 RedGuild_Alts   	= RedGuild_Alts   or {}
 RedGuild_AltParent 	= RedGuild_AltParent or {}
 RedGuild_ML 		= RedGuild_ML 	  or {}
@@ -20,6 +21,7 @@ RedGuild_Config.addonUsers     = RedGuild_Config.addonUsers     or {}
 RedGuild_Config.onlineEditors  = RedGuild_Config.onlineEditors  or {}
 RedGuild_Config.authorizedEditors = RedGuild_Config.authorizedEditors or {}
 RedGuild_Config.hideMeFromSync = RedGuild_Config.hideMeFromSync or false
+RedGuild_Config.EditorVersions = RedGuild_Config.EditorVersions or {}
 
 RedGuild_Usage = RedGuild_Usage or {}
 RedGuild_SyncLocked = true
@@ -341,6 +343,15 @@ function RedGuild_Send(msgType, payload, target)
 
         C_ChatInfo.SendAddonMessage(REDGUILD_CHAT_PREFIX, msg, channel, actualTarget)
     end
+end
+
+local function RedGuild_CreateDKPBackup()
+    RedGuild_BackupData.data      = CopyTable(RedGuild_Data)
+    RedGuild_BackupData.version   = tonumber(RedGuild_Config.dkpVersion or 0)
+    RedGuild_BackupData.timestamp = date("%Y-%m-%d %H:%M:%S")
+    RedGuild_BackupData.from      = RedGuild_PendingForceSync and RedGuild_PendingForceSync.editor or "unknown"
+
+    D("DKP backup created (version " .. tostring(RedGuild_BackupData.version) .. ")")
 end
 
 --------------------------------------------------
@@ -874,6 +885,22 @@ local function EnsureProtectedEditor()
 
     -- If guild leader cannot be determined, DO NOTHING.
     -- Do NOT auto-add anyone else.
+end
+
+local function GetHighestVersionEditor()
+    local bestEditor = nil
+    local bestVersion = -1
+
+    for name, ver in pairs(RedGuild_Config.EditorVersions) do
+        if IsEditor(name) and IsOnline(name) then
+            if tonumber(ver) and ver > bestVersion then
+                bestVersion = ver
+                bestEditor = name
+            end
+        end
+    end
+
+    return bestEditor, bestVersion
 end
 
 --------------------------------------------------------------------
@@ -2014,6 +2041,17 @@ function RefreshEditorList()
 
         row.name = name
 
+        -- Fetch known version (may be nil)
+        local ver = RedGuild_Config.EditorVersions and RedGuild_Config.EditorVersions[name]
+		
+		-- Build display text
+        local display
+        if ver then
+            display = string.format("%s (v%s)", name, ver)
+        else
+            display = string.format("%s (—)", name)
+        end
+		
         -- GOLD for protected editor
         if protected and NormalizeName(name) == NormalizeName(protected) then
             row.text:SetText("|cffffd700" .. name .. "|r")
@@ -4672,6 +4710,33 @@ end)
         note:SetText("|cffaaaaaa* Guild leaders are editors by default.|r")
     end
 
+----------------------------------------------------------------
+-- REVERT DKP BACKUP BUTTON (Editors only)
+----------------------------------------------------------------
+local revertBtn = CreateFrame("Button", nil, editorsPanel, "UIPanelButtonTemplate")
+revertBtn:SetSize(140, 22)
+revertBtn:SetText("Revert DKP Backup")
+revertBtn:SetPoint("BOTTOMRIGHT", editorsPanel, "BOTTOMRIGHT", -20, 50)
+
+revertBtn:SetScript("OnClick", function()
+    if not RedGuild_BackupData or not RedGuild_BackupData.data then
+        Print("|cffff5555No DKP backup available.|r")
+        return
+    end
+
+    StaticPopup_Show("REDGUILD_RESTORE_DKP_CONFIRM")
+end)
+
+-- Only show button to editors
+editorsPanel:HookScript("OnShow", function()
+    local canEditEditors = IsGuildOfficer() or IsEditor(UnitName("player"))
+    if canEditEditors then
+        revertBtn:Show()
+    else
+        revertBtn:Hide()
+    end
+end)
+
 ------------------------------------------------------------
 -- HIDE ME FROM SYNC CHECKBOX
 ------------------------------------------------------------
@@ -5382,6 +5447,12 @@ local function ApplySyncData(sender, encoded)
     sender = Ambiguate(sender or "", "short")
     if not sender or sender == "" then return end
     if sender == UnitName("player") then return end
+	
+	-- Editors must NEVER accept normal DATA syncs
+	if IsEditor(UnitName("player")) then
+		SafeSetSyncWarning("Ignored DKP sync — editors only accept FORCE_REQ.")
+		return
+	end
 
     if RedGuild_SyncLocked then
         SafeSetSyncWarning("Sync received during startup — ignored.")
@@ -5520,7 +5591,13 @@ local function AttemptAutoSync()
         return
     end
 
-    local bestEditor = GetHighestRankEditor()
+    local bestEditor = GetHighestVersionEditor()
+
+	-- Fallback if no version info yet
+	if not bestEditor then
+		bestEditor = GetHighestRankEditor()
+	end
+	
     if not bestEditor then
         SafeSetSyncWarning("No editor online — your DKP may be outdated.")
         return
@@ -5598,7 +5675,21 @@ StaticPopupDialogs["REDGUILD_FORCE_SYNC_RECEIVE"] = {
             return
         end
 
-        ApplyDKPSnapshot(RedGuild_PendingForceSync.snapshot)
+		
+		RedGuild_CreateDKPBackup()
+		
+		-- Update DKP version and sync metadata
+		local incomingVersion = tonumber(RedGuild_PendingForceSync.snapshot.version or 0)
+		RedGuild_Config.dkpVersion = incomingVersion
+
+		RedGuild_Config.lastDKPSync     = date("%Y-%m-%d %H:%M:%S")
+		RedGuild_Config.lastDKPSyncFrom = editor
+
+		-- Update editor version table
+		local key = NormalizeName(editor)
+		RedGuild_Config.EditorVersions[key] = incomingVersion
+		
+		ApplyDKPSnapshot(RedGuild_PendingForceSync.snapshot)
         UpdateTable()
         SafeSetSyncWarning("")
         RedGuild_LastSyncTime = date("%Y-%m-%d %H:%M:%S")
@@ -5614,6 +5705,24 @@ StaticPopupDialogs["REDGUILD_FORCE_SYNC_RECEIVE"] = {
         SafeSetSyncWarning("WARNING — You declined a sync so your dkp data may be out of date.")
         RedGuild_PendingForceSync.editor   = nil
         RedGuild_PendingForceSync.snapshot = nil
+    end,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+}
+
+StaticPopupDialogs["REDGUILD_RESTORE_DKP_CONFIRM"] = {
+    text = "Restore DKP table from last backup?\nThis will overwrite ALL current DKP data.",
+    button1 = "Restore",
+    button2 = "Cancel",
+    OnAccept = function()
+        if RedGuild_BackupData and RedGuild_BackupData.data then
+            RedGuild_Data = CopyTable(RedGuild_BackupData.data)
+            RedGuild_Config.dkpVersion = RedGuild_BackupData.version or 0
+            UpdateTable()
+            Print("|cff00ff00DKP restored from backup (" ..
+                (RedGuild_BackupData.timestamp or "unknown") .. ").|r")
+        end
     end,
     timeout = 0,
     whileDead = true,
@@ -6356,7 +6465,13 @@ if simpleType == "VERSIONREP" then
     RedGuild_Config.lastVersionSync = date("%Y-%m-%d %H:%M:%S")
     RedGuild_Config.lastVersionSyncFrom = sender
     UpdateSyncStatus()
+	
+	 -- Store editor version
+    if IsEditor(sender) then
+        RedGuild_Config.EditorVersions[sender] = remoteVer
+    end
 
+    -- Notify user if newer version exists
     if remoteVer ~= "" and CompareVersions(REDGUILD_VERSION, remoteVer) then
         if not RedGuild_Config.seenNewerVersion then
             RedGuild_Config.seenNewerVersion = true
