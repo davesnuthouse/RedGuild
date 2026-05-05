@@ -11,6 +11,7 @@ Features to deliver ASAP:
 * Revisit audit log now that sync is working
 * Redo the way DKP table saves to a single button commit (hook into editor rollback funcitonality)
 * Use alt data for editors to remove their alts from sync (better data integrity)
+* Improve whisper response functionality
 
 
 Outstanding bugs:
