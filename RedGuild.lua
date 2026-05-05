@@ -5260,6 +5260,11 @@ end)
 
         forceBtn:SetScript("OnClick", function()
             if not IsAuthorized() then return end
+		    if RedGuild_Config.hideMeFromSync then
+				StaticPopup_Show("REDGUILD_FORCE_SYNC_BLOCKED")
+				return
+			end
+			
             StaticPopup_Show("REDGUILD_FORCE_SYNC_CONFIRM")
         end)
     end
@@ -5627,6 +5632,14 @@ local function AttemptAutoSync()
 end
 
 -- Popups
+StaticPopupDialogs["REDGUILD_FORCE_SYNC_BLOCKED"] = {
+    text = "You cannot initiate a force sync while 'Hide me from SYNC' is enabled.",
+    button1 = "OK",
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+}
+
 StaticPopupDialogs["REDGUILD_FORCE_SYNC_CONFIRM"] = {
     text = "Force sync will overwrite ALL guild DKP with YOUR data. Proceed?",
     button1 = "Yes",
@@ -5645,6 +5658,11 @@ StaticPopupDialogs["REDGUILD_FORCE_SYNC_CONFIRM"] = {
         RedGuild_ForceSyncStatus.declinedEditors = {}
 
         local payloadTbl = BuildSyncPayload()
+		
+		-- Inject version + editor into the snapshot BEFORE encoding
+		payloadTbl.version = tonumber(RedGuild_Config.dkpVersion or 0)
+		payloadTbl.editor  = UnitName("player")
+		
         local encoded    = EncodePayload(payloadTbl)
 
         -- Broadcast FORCE_REQ with DKP snapshot via GUILD
@@ -5684,29 +5702,27 @@ StaticPopupDialogs["REDGUILD_FORCE_SYNC_RECEIVE"] = {
             return
         end
 
-		RedGuild_CreateDKPBackup()
-		
-		-- Update DKP version and sync metadata
-		local incomingVersion = tonumber(RedGuild_PendingForceSync.snapshot.version or 0)
-		RedGuild_Config.dkpVersion = incomingVersion
+        RedGuild_Config.EditorVersions = RedGuild_Config.EditorVersions or {}
 
-		RedGuild_Config.lastDKPSync     = date("%Y-%m-%d %H:%M:%S")
-		RedGuild_Config.lastDKPSyncFrom = editor
-		
-		-- Update DKP version and editor version map
-		local incomingVersion = tonumber(RedGuild_PendingForceSync.snapshot.version or 0) or 0
-		RedGuild_Config.dkpVersion = incomingVersion
+        RedGuild_CreateDKPBackup()
+        
+        -- Update DKP version and sync metadata
+        local incomingVersion = tonumber(RedGuild_PendingForceSync.snapshot.version or 0)
+        RedGuild_Config.dkpVersion = incomingVersion
 
-		-- Update editor version table
-		local key = NormalizeName(editor)
-		RedGuild_Config.EditorVersions[key] = incomingVersion
-		
-		ApplyDKPSnapshot(RedGuild_PendingForceSync.snapshot)
+        RedGuild_Config.lastDKPSync     = date("%Y-%m-%d %H:%M:%S")
+        RedGuild_Config.lastDKPSyncFrom = editor
+        
+        -- Update editor version table
+        local key = NormalizeName(editor)
+        RedGuild_Config.EditorVersions[key] = incomingVersion
+        
+        ApplyDKPSnapshot(RedGuild_PendingForceSync.snapshot)
         UpdateTable()
         SafeSetSyncWarning("")
         RedGuild_LastSyncTime = date("%Y-%m-%d %H:%M:%S")
 
-		UpdateSyncStatus()
+        UpdateSyncStatus()
 
         RedGuild_Send("FORCE_ACCEPT", UnitName("player"), editor)
         RedGuild_PendingForceSync.editor   = nil
@@ -6194,11 +6210,11 @@ if event == "PLAYER_LOGIN" then
     end)
 	
 	-- Periodic sync status refresh (every 10 seconds)
-	if mainFrame and mainFrame:IsShown() then
-        UpdateSyncStatus()
-    end
 	C_Timer.NewTicker(10, function()
-    UpdateSyncStatus()
+		if mainFrame and mainFrame:IsShown() then
+			UpdateSyncStatus()
+		end	
+	end)
 
     return
 end
@@ -6342,7 +6358,7 @@ if event == "CHAT_MSG_ADDON" then
             end
 
             -------------------------------------------------
-            -- FORCE SYNC (version‑check removed)
+            -- FORCE SYNC
             -------------------------------------------------
             if chunkType == "FORCE_REQ" then
                 local ok, payload = pcall(DecodePayload, full)
@@ -6528,10 +6544,12 @@ if event == "CHAT_MSG_WHISPER" then
 -- AUTO-REPLY: "What is my DKP?"
 do
     local lower = text:lower()
-    if lower:find("what is my dkp", 1, true)
-        or lower:find("whats my dkp", 1, true)
-        or lower:find("what's my dkp", 1, true)
-    then
+
+	local hasMy  = lower:find("my", 1, true)
+	local hasDKP = lower:find("dkp", 1, true)
+	local hasQ   = lower:find("?", 1, true)
+
+	if hasMy and hasDKP and hasQ then
         if IsAuthorized() then
             local d = RedGuild_Data[sender]
             if d then
