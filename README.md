@@ -31,6 +31,11 @@ Ideas for future releases (significant work):
 
 
 
+1.7.69 Changelog
+-------------------------------------------------------
+Bugs squashed:
+*  Broken name referencing for editors on alts
+
 
 
 1.6.69 Changelog
