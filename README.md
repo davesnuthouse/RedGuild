@@ -4,12 +4,13 @@ IS ADDON CURRENTLY SAFE TO USE : YES
 
 NOTE - YOU SHOULD ONLY USE THE RELEASE VERSION ON CURSEFORGE.  THE LUA LISTED HERE IS IN DEVELOPMENT
 
-Required urgent missing functionality:
+Required urgently:
 * Prevent out of date editors from syncing at all
+* A bold change to improve sync efficiency (might brake everything so held off for now)
 
 Features to deliver ASAP:
-* Revisit audit log now that sync is working
 * Redo the way DKP table saves to a single button commit (hook into editor rollback funcitonality)
+* Revisit audit log completely (might be better after the dkp save change)
 * Use alt data for editors to remove their alts from sync (better data integrity)
 * Add a small sync to check table version between non editors and colour the sync info if out of date
 
