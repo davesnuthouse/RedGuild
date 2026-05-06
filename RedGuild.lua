@@ -12,7 +12,7 @@ RedGuild_Audit  	= RedGuild_Audit  or {}
 RedGuild_Usage  	= RedGuild_Usage  or {}
 
 local addonName      = ...
-local REDGUILD_VERSION = "1.5.69"
+local REDGUILD_VERSION = "1.6.69"
 
 local REDGUILD_CHAT_PREFIX = "REDGUILD"
 
@@ -2153,7 +2153,7 @@ syncButton:SetScript("OnEnter", function()
     GameTooltip:AddLine(" ")
 
     -- Version sync
-    GameTooltip:AddLine("|cffffff00Version Sync|r")
+    GameTooltip:AddLine("|cffffff00Addon Version Sync|r")
     GameTooltip:AddLine("|cffffffffLast: |r" .. ColourForSyncAge(RedGuild_Config.lastVersionSync or "Never"))
     GameTooltip:AddLine("|cffffffffFrom: |r" .. (RedGuild_Config.lastVersionSyncFrom or "?"))
     GameTooltip:AddLine(" ")
@@ -2162,6 +2162,7 @@ syncButton:SetScript("OnEnter", function()
 GameTooltip:AddLine("|cffffff00DKP Sync|r")
 GameTooltip:AddLine("|cffffffffLast: |r" .. ColourForSyncAge(RedGuild_Config.lastDKPSync or "Never"))
 GameTooltip:AddLine("|cffffffffFrom: |r" .. (RedGuild_Config.lastDKPSyncFrom or "?"))
+GameTooltip:AddLine("|cffffffffTable Version: |r" .. (RedGuild_Config.dkpVersion or "?"))
 GameTooltip:AddLine(" ")
 
 -- Alt sync
@@ -5702,13 +5703,11 @@ StaticPopupDialogs["REDGUILD_FORCE_SYNC_RECEIVE"] = {
             return
         end
 
-        RedGuild_Config.EditorVersions = RedGuild_Config.EditorVersions or {}
-
         RedGuild_CreateDKPBackup()
         
         -- Update DKP version and sync metadata
-        local incomingVersion = tonumber(RedGuild_PendingForceSync.snapshot.version or 0)
-        RedGuild_Config.dkpVersion = incomingVersion
+        local incomingdkpVersion = tonumber(RedGuild_PendingForceSync.snapshot.dkpVersion or 0) or 0
+        RedGuild_Config.dkpVersion = incomingdkpVersion
 
         RedGuild_Config.lastDKPSync     = date("%Y-%m-%d %H:%M:%S")
         RedGuild_Config.lastDKPSyncFrom = editor
@@ -6368,10 +6367,10 @@ if event == "CHAT_MSG_ADDON" then
                 if type(snapshot) ~= "table" then return end
 
                 local editor = entry.from or sender
+				local incoming = tonumber(payload.dkpVersion or 0) or 0
 
                 -- NON‑EDITORS: auto‑apply, no version gating
                 if not IsAuthorized() then
-                    local incoming = tonumber(payload.version or 0)
 
                     if not IsActiveGuildMember(sender) then
                         D("FORCE_REQ → ignoring for non‑guild member")
@@ -6512,11 +6511,6 @@ if simpleType == "VERSIONREP" then
     RedGuild_Config.lastVersionSyncFrom = sender
     UpdateSyncStatus()
 	
-	 -- Store editor version
-    if IsEditor(sender) then
-        RedGuild_Config.EditorVersions[key] = remoteVer
-    end
-
     -- Notify user if newer version exists
     if remoteVer ~= "" and CompareVersions(REDGUILD_VERSION, remoteVer) then
         if not RedGuild_Config.seenNewerVersion then
