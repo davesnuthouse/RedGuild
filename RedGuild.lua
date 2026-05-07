@@ -12,7 +12,7 @@ RedGuild_Audit  	= RedGuild_Audit  or {}
 RedGuild_Usage  	= RedGuild_Usage  or {}
 
 local addonName      = ...
-local REDGUILD_VERSION = "1.6.69"
+local REDGUILD_VERSION = "1.7.69"
 
 local REDGUILD_CHAT_PREFIX = "REDGUILD"
 
@@ -347,11 +347,11 @@ end
 
 local function RedGuild_CreateDKPBackup()
     RedGuild_BackupData.data      = CopyTable(RedGuild_Data)
-    RedGuild_BackupData.version   = tonumber(RedGuild_Config.dkpVersion or 0)
+    RedGuild_BackupData.dkpVersion   = tonumber(RedGuild_Config.dkpVersion or 0)
     RedGuild_BackupData.timestamp = date("%Y-%m-%d %H:%M:%S")
     RedGuild_BackupData.from      = RedGuild_PendingForceSync and RedGuild_PendingForceSync.editor or "unknown"
 
-    D("DKP backup created (version " .. tostring(RedGuild_BackupData.version) .. ")")
+    D("DKP backup created (version " .. tostring(RedGuild_BackupData.dkpVersion) .. ")")
 end
 
 --------------------------------------------------
@@ -892,7 +892,7 @@ local function GetHighestVersionEditor()
     local bestVersion = -1
 
     for name, ver in pairs(RedGuild_Config.EditorVersions) do
-        if IsEditor(name) and IsOnline(name) then
+        if IsEditor(name) and IsAddonUserOnlineForTooltip(name) then
             if tonumber(ver) and ver > bestVersion then
                 bestVersion = ver
                 bestEditor = name
@@ -4810,7 +4810,7 @@ end)
     end
 
 ------------------------------------------------------------
--- DKP VERSION FOOTER INFO LINE (small + grey)
+-- ADDON VERSION FOOTER INFO LINE (small + grey)
 ------------------------------------------------------------
 local dkpFooter = dkpPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 dkpFooter:SetPoint("BOTTOM", dkpPanel, "BOTTOM", 0, 10)
@@ -5496,7 +5496,7 @@ local function ApplySyncData(sender, encoded)
 
 	if not IsEditor(UnitName("player")) then
 		if incoming <= localVer then
-			SafeSetSyncWarning("Ignored older DKP sync.")
+			SafeSetSyncWarning("DKP sync not required.")
 			return
 		end
 	end
@@ -5614,7 +5614,7 @@ local function AttemptAutoSync()
 	end
 	
     if not bestEditor then
-        SafeSetSyncWarning("No editor online — your DKP may be outdated.")
+        SafeSetSyncWarning("Correct editor not online — your DKP may be outdated.")
         return
     end
 
@@ -5661,7 +5661,7 @@ StaticPopupDialogs["REDGUILD_FORCE_SYNC_CONFIRM"] = {
         local payloadTbl = BuildSyncPayload()
 		
 		-- Inject version + editor into the snapshot BEFORE encoding
-		payloadTbl.version = tonumber(RedGuild_Config.dkpVersion or 0)
+		payloadTbl.dkpVersion = tonumber(RedGuild_Config.dkpVersion or 0)
 		payloadTbl.editor  = UnitName("player")
 		
         local encoded    = EncodePayload(payloadTbl)
@@ -5745,7 +5745,7 @@ StaticPopupDialogs["REDGUILD_RESTORE_DKP_CONFIRM"] = {
     OnAccept = function()
         if RedGuild_BackupData and RedGuild_BackupData.data then
             RedGuild_Data = CopyTable(RedGuild_BackupData.data)
-            RedGuild_Config.dkpVersion = RedGuild_BackupData.version or 0
+            RedGuild_Config.dkpVersion = RedGuild_BackupData.dkpVersion or 0
             UpdateTable()
             Print("|cff00ff00DKP restored from backup (" ..
                 (RedGuild_BackupData.timestamp or "unknown") .. ").|r")
@@ -6626,19 +6626,12 @@ SlashCmdList["REDGUILD"] = function(msg)
         return
 	end
 	
-	if msg == "tableversion" or msg == "tablever" then
-		local v = tonumber(RedGuild_Config.dkpVersion or 0)
-		print("|cffffd100[RedGuild]|r DKP Table Version: |cff00ff00" .. v .. "|r")
-		return
-	end
-
     if msg == "help" or msg == "" then
         print("|cffffd100RedGuild Commands:|r")
         print("|cff00ff00/redguild show|r   - Open the DKP window")
         print("|cff00ff00/redguild hide|r   - Hide the DKP window")
         print("|cff00ff00/redguild toggle|r - Toggle the DKP window")
         print("|cff00ff00/redguild minimap|r - Reset minimap icon position")
-		print("|cff00ff00/redguild tableversion|r - Show what version of DKP table you have")
         print("|cff00ff00/redguild help|r   - Show this help list")
         return
     end
