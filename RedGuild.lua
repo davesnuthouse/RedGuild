@@ -12,7 +12,7 @@ RedGuild_Audit  	= RedGuild_Audit  or {}
 RedGuild_Usage  	= RedGuild_Usage  or {}
 
 local addonName      = ...
-local REDGUILD_VERSION = "1.7.69"
+local REDGUILD_VERSION = "1.8.69"
 
 local REDGUILD_CHAT_PREFIX = "REDGUILD"
 
@@ -5291,8 +5291,7 @@ end
 local function BuildSyncPayload()
     return {
         sender = UnitName("player"),
-        version = RedGuild_Config.dkpVersion or 0,
-        dkp = RedGuild_Data,
+        dkp = CopyTable(RedGuild_Data),  -- IMPORTANT: copy, don’t reference
     }
 end
 
@@ -5491,7 +5490,7 @@ local function ApplySyncData(sender, encoded)
         return
     end
 
-	local incoming = tonumber(payload.version or 0)
+	local incoming = tonumber(payload.dkpVersion or 0)
 	local localVer = tonumber(RedGuild_Config.dkpVersion or 0)
 
 	if not IsEditor(UnitName("player")) then
@@ -5661,7 +5660,7 @@ StaticPopupDialogs["REDGUILD_FORCE_SYNC_CONFIRM"] = {
         local payloadTbl = BuildSyncPayload()
 		
 		-- Inject version + editor into the snapshot BEFORE encoding
-		payloadTbl.dkpVersion = tonumber(RedGuild_Config.dkpVersion or 0)
+		payloadTbl.dkp.dkpVersion = tonumber(RedGuild_Config.dkpVersion or 0)
 		payloadTbl.editor  = UnitName("player")
 		
         local encoded    = EncodePayload(payloadTbl)
@@ -5680,7 +5679,7 @@ StaticPopupDialogs["REDGUILD_FORCE_SYNC_CONFIRM"] = {
 }
 
 StaticPopupDialogs["REDGUILD_REQUEST_SYNC_EDITOR_CONFIRM"] = {
-    text = "Sync for another editor?",
+    text = "Sync from another editor?",
     button1 = "Yes",
     button2 = "No",
     OnAccept = function()
@@ -5714,7 +5713,7 @@ StaticPopupDialogs["REDGUILD_FORCE_SYNC_RECEIVE"] = {
         
         -- Update editor version table
         local key = NormalizeName(editor)
-        RedGuild_Config.EditorVersions[key] = incomingVersion
+        RedGuild_Config.EditorVersions[key] = incomingdkpVersion
         
         ApplyDKPSnapshot(RedGuild_PendingForceSync.snapshot)
         UpdateTable()
