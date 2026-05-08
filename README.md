@@ -13,6 +13,7 @@ Features to deliver ASAP:
 * Revisit audit log completely (might be better after the dkp save change)
 * Use alt data for editors to remove their alts from sync (better data integrity)
 * Add a small sync to check table version between non editors and colour the sync info if out of date
+* Sync info to show out of date addon users count
 
 
 Outstanding bugs:
