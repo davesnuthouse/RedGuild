@@ -29,6 +29,12 @@ Ideas for future releases (significant work):
 * are you back check?
 
 
+-------------------------------------------------------
+1.8.69 Changelog
+-------------------------------------------------------
+Bugs squashed:
+*  DKP Table version wrong on force sync
+
 
 
 1.7.69 Changelog
@@ -46,7 +52,6 @@ Added features:
 * Improved whisper response functionality
 * Table version in sync info
 
-
 Bugs squashed:
 * Fixed bad sync between editors
 * Sync info now correctly shows editor syncs
@@ -55,18 +60,13 @@ Bugs squashed:
 
 
 
-
-
-
 1.5.69 Changelog
 -------------------------------------------------------
 Added features:
 * Alt Tracker now shows online status
 
-
 Bugs squashed:
 * Moved the add options on Alt Tracker to under the boxes
-
 
 
 
@@ -83,7 +83,6 @@ Added features:
 * Right click minimap now opens ML table
 * Escape closes the addon again (it's the little things right)
 
-
 Bugs Squashed:
 * ML Scorecard loads names without needing reset
 * Inviter shows "In your group 0" when not grouped (cosmetic)
@@ -91,7 +90,6 @@ Bugs Squashed:
 * Window wont move with ML Scorecard open
 * Escape does not close the addon (not really a bug - QOL)
 * * ML notes needs 2 clicks
-
 
 
 
@@ -105,12 +103,14 @@ Added features:
 
 Bugs Squashed:
 * (Fixed) Balance calculations sorted on table and whispers
+  
 
 
 1.2.69 Changelog
 -------------------------------------------------------------
 Bugs Squashed:
 * (Done) ML Scorecard group/raid filter was broken
+
 
 
 1.1.69 Changelog
