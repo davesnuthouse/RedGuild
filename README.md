@@ -20,6 +20,7 @@ Outstanding bugs:
 * Force sync isnt showing editor response from Luna
 * DKP table version display / update not all there (editors only)
 * Check that if force sync is declined or fails, sync information reflects this (maybe add "last sync status"?)
+* Sync status shouldnt be orange for editor with highest version
   
 
 Ideas for future releases (significant work):
