@@ -21,6 +21,7 @@ Outstanding bugs:
 * DKP table version display / update not all there (editors only)
 * Check that if force sync is declined or fails, sync information reflects this (maybe add "last sync status"?)
 * Sync status shouldnt be orange for editor with highest version
+* Addon users should only count mains
   
 
 Ideas for future releases (significant work):
