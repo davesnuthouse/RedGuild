@@ -16,12 +16,12 @@ local REDGUILD_VERSION = "1.8.69"
 
 local REDGUILD_CHAT_PREFIX = "REDGUILD"
 
-RedGuild_Config.smartSync      = (RedGuild_Config.smartSync ~= false)
-RedGuild_Config.addonUsers     = RedGuild_Config.addonUsers     or {}
-RedGuild_Config.onlineEditors  = RedGuild_Config.onlineEditors  or {}
-RedGuild_Config.authorizedEditors = RedGuild_Config.authorizedEditors or {}
-RedGuild_Config.hideMeFromSync = RedGuild_Config.hideMeFromSync or false
-RedGuild_Config.EditorVersions = RedGuild_Config.EditorVersions or {}
+RedGuild_Config.smartSync      		= (RedGuild_Config.smartSync ~= false)
+RedGuild_Config.addonUsers     		= RedGuild_Config.addonUsers     or {}
+RedGuild_Config.onlineEditors  		= RedGuild_Config.onlineEditors  or {}
+RedGuild_Config.authorizedEditors 	= RedGuild_Config.authorizedEditors or {}
+RedGuild_Config.hideMeFromSync 		= RedGuild_Config.hideMeFromSync or false
+RedGuild_Config.EditorVersions 		= RedGuild_Config.EditorVersions or {}
 
 RedGuild_Usage = RedGuild_Usage or {}
 RedGuild_SyncLocked = true
@@ -822,6 +822,28 @@ local function CompareVersions(localVer, remoteVer)
     if rb > lb then return true end
     if rb < lb then return false end
     return rc > lc
+end
+
+local function CountOutdatedUsers()
+
+    if not RedGuild_Config.AddonVersions then
+        return 0
+    end
+
+    local count = 0
+    local latest = REDGUILD_VERSION
+
+    if not RedGuild_Config.AddonVersions then
+        return 0
+    end
+
+    for name, ver in pairs(RedGuild_Config.AddonVersions or {}) do
+        if CompareVersions(latest, ver) then
+            count = count + 1
+        end
+    end
+
+    return count
 end
 
 local function ParseAuditTime(t)
@@ -2131,6 +2153,8 @@ statusBox:SetSize(12, 12)
 --------------------------------------------------------------------
 -- TOOLTIP FOR SYNC INDICATOR
 --------------------------------------------------------------------
+local addonVersions = RedGuild_Config.AddonVersions or {}
+
 syncButton:SetScript("OnEnter", function()
     GameTooltip:SetOwner(syncButton, "ANCHOR_TOPRIGHT")
     GameTooltip:ClearLines()
@@ -2149,6 +2173,10 @@ syncButton:SetScript("OnEnter", function()
 	end
 
 	GameTooltip:AddLine("|cffffffffAddon users: |r" .. online .. " / " .. total)
+
+	--Outdated addon users
+	local outdated = CountOutdatedUsers()
+	GameTooltip:AddLine("|cffffffffOutdated addon users: |r" .. outdated)
 
     GameTooltip:AddLine(" ")
 
@@ -6504,6 +6532,9 @@ if simpleType == "VERSIONREP" then
 	
 	-- Convert version to number
     local remoteVer = simplePayload or ""
+	
+	RedGuild_Config.AddonVersions = RedGuild_Config.AddonVersions or {}
+    RedGuild_Config.AddonVersions[key] = remoteVer
 
     -- Track version sync for tooltip
     RedGuild_Config.lastVersionSync = date("%Y-%m-%d %H:%M:%S")
