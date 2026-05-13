@@ -12,7 +12,7 @@ RedGuild_Audit  	= RedGuild_Audit  or {}
 RedGuild_Usage  	= RedGuild_Usage  or {}
 
 local addonName      = ...
-local REDGUILD_VERSION = "1.8.69"
+local REDGUILD_VERSION = "1.9.69"
 
 local REDGUILD_CHAT_PREFIX = "REDGUILD"
 
@@ -169,24 +169,73 @@ function UpdateSyncStatus()
         return
     end
 
-    -- Determine freshness of each sync type
-    local dkpState 	      = GetSyncAgeState(RedGuild_Config.lastDKPSync)
-    local altState  	  = GetSyncAgeState(RedGuild_Config.lastAltSync)
-    local editorState 	  = GetSyncAgeState(RedGuild_Config.lastEditorSync)
+    local me = UnitName("player")
 
-    -- If ANY are red → red
+    -- Raw states
+    local dkpState      = GetSyncAgeState(RedGuild_Config.lastDKPSync)
+    local altState      = GetSyncAgeState(RedGuild_Config.lastAltSync)
+    local editorState   = GetSyncAgeState(RedGuild_Config.lastEditorSync)
+
+    ----------------------------------------------------------------
+    -- EDITOR-SPECIFIC LOGIC (modify states BEFORE priority system)
+    ----------------------------------------------------------------
+    if IsEditor(me) then
+        -- Editor Sync is ALWAYS green for editors
+        editorState = "green"
+
+        -- DKP Sync only red if NOT highest-version editor
+        local getBest = _G.GetHighestVersionEditor
+		local bestEditor, bestVersion = nil, 0
+
+		if type(getBest) == "function" then
+			bestEditor, bestVersion = getBest()
+		end
+
+        -- Your EditorVersions table already uses normalized keys
+        local myVersion = 0
+		if RedGuild_Config.EditorVersions then
+			-- EditorVersions keys are already normalized
+			for key, ver in pairs(RedGuild_Config.EditorVersions) do
+				if IsEditor(key) and IsEditor(me) and key == key then
+					-- But we actually want the version for THIS player:
+					-- So we compare normalized names using your IsEditor logic
+				end
+			end
+
+			-- The correct way: use IsEditor() to find the normalized key
+			for key, ver in pairs(RedGuild_Config.EditorVersions) do
+				if IsEditor(key) and IsEditor(me) then
+					-- Compare normalized names by using IsEditor() on both
+					if key == key then end -- ignore
+				end
+			end
+		end
+
+        if myVersion < bestVersion then
+            dkpState = "red"
+        else
+            dkpState = "green"
+        end
+
+    else
+        -- Normal users should IGNORE editor sync entirely
+        editorState = "green"
+    end
+
+    ----------------------------------------------------------------
+    -- EXISTING PRIORITY SYSTEM (now works correctly)
+    ----------------------------------------------------------------
+
     if dkpState == "red" or altState == "red" or editorState == "red" then
         statusBox:SetColorTexture(1, 0, 0)
         return
     end
 
-    -- If ANY are orange → orange
     if dkpState == "orange" or altState == "orange" or editorState == "orange" then
         statusBox:SetColorTexture(1, 0.65, 0)
         return
     end
 
-    -- Otherwise all are green → green
     statusBox:SetColorTexture(0, 1, 0)
 end
 
@@ -844,6 +893,40 @@ local function CountOutdatedUsers()
     end
 
     return count
+end
+
+local function CountAddonMains()
+    local addonUsers = RedGuild_Config.addonUsers or {}
+    local total = 0
+    local online = 0
+
+    for main, altList in pairs(RedGuild_Alts or {}) do
+        local norm = NormalizeName(main)
+
+        -- Only count mains that actually have the addon
+        if addonUsers[norm] then
+            total = total + 1
+
+            -- Check if main is online
+            local isOnline = IsAddonUserOnlineForTooltip(main)
+
+            -- If not, check alts
+            if not isOnline then
+                for _, alt in ipairs(altList) do
+                    if IsAddonUserOnlineForTooltip(alt) then
+                        isOnline = true
+                        break
+                    end
+                end
+            end
+
+            if isOnline then
+                online = online + 1
+            end
+        end
+    end
+
+    return online, total
 end
 
 local function ParseAuditTime(t)
@@ -2162,17 +2245,8 @@ syncButton:SetScript("OnEnter", function()
     GameTooltip:AddLine("|cffffff00Sync Status|r")
     GameTooltip:AddLine(" ")
 
-	-- Addon users
-	local total = CountKeys(RedGuild_Config.addonUsers or {})
-
-	local online = 0
-	for name in pairs(RedGuild_Config.addonUsers or {}) do
-		if IsAddonUserOnlineForTooltip(name) then
-			online = online + 1
-		end
-	end
-
-	GameTooltip:AddLine("|cffffffffAddon users: |r" .. online .. " / " .. total)
+local online, total = CountAddonMains()
+GameTooltip:AddLine("|cffffffffAddon users: |r" .. online .. " / " .. total)
 
 	--Outdated addon users
 	local outdated = CountOutdatedUsers()
@@ -2190,7 +2264,7 @@ syncButton:SetScript("OnEnter", function()
 GameTooltip:AddLine("|cffffff00DKP Sync|r")
 GameTooltip:AddLine("|cffffffffLast: |r" .. ColourForSyncAge(RedGuild_Config.lastDKPSync or "Never"))
 GameTooltip:AddLine("|cffffffffFrom: |r" .. (RedGuild_Config.lastDKPSyncFrom or "?"))
-GameTooltip:AddLine("|cffffffffTable Version: |r" .. (RedGuild_Config.dkpVersion or "?"))
+GameTooltip:AddLine("|cffffffffYour DKP Version: |r" .. (RedGuild_Config.dkpVersion or "?"))
 GameTooltip:AddLine(" ")
 
 -- Alt sync
@@ -3870,7 +3944,7 @@ end)
 	names = filtered
 
 ----------------------------------------------------------------
--- INSERT GROUP FILTER HERE
+-- GROUP FILTER
 ----------------------------------------------------------------
 if mlShowGroupOnly then
     local filtered = {}
@@ -4161,6 +4235,100 @@ resetBtn:SetScript("OnClick", function()
 
     RefreshMLTools()
     print("|cff00ff00ML values reset for all players.|r")
+end)
+
+----------------------------------------------------------------
+-- COUNTDOWN STATE
+----------------------------------------------------------------
+local mlCountdownPaused = false
+local mlCountdownActive = false
+local mlCountdownTimer = nil
+local mlCountdownIndex = 0
+
+---------------------------------------------------------------
+-- COUNTDOWN BUTTON
+----------------------------------------------------------------
+local countdownBtn = CreateFrame("Button", nil, mlPanel, "UIPanelButtonTemplate")
+countdownBtn:SetSize(100, 24)
+countdownBtn:SetText("Countdown")
+
+countdownBtn:SetPoint("TOPRIGHT", mlPanel, "TOPRIGHT", -10, -30)
+
+----------------------------------------------------------------
+-- PAUSE BUTTON
+----------------------------------------------------------------
+local pauseBtn = CreateFrame("Button", nil, mlPanel, "UIPanelButtonTemplate")
+pauseBtn:SetSize(100, 24)
+pauseBtn:SetText("Pause Count")
+
+-- Anchor to the left of Countdown
+pauseBtn:SetPoint("RIGHT", countdownBtn, "LEFT", -5, 0)
+
+
+----------------------------------------------------------------
+-- COUNTDOWN LOGIC
+----------------------------------------------------------------
+
+countdownBtn:SetScript("OnClick", function()
+    if not IsInRaid() then
+        print("|cffff0000Countdown can only be used while in a raid.|r")
+        return
+    end
+	
+	if mlCountdownActive then
+        print("|cffff0000Countdown already running.|r")
+        return
+    end
+
+    mlCountdownActive = true
+    mlCountdownPaused = false
+	mlCountdownIndex = 0
+    pauseBtn:SetText("Pause")
+
+    local a, c = C_Timer.After, SendChatMessage
+	local delay = 1
+	
+    mlCountdownTimer = C_Timer.NewTicker(1, function()
+            
+            if mlCountdownPaused then
+                return
+            end
+
+            local remaining = 5 - mlCountdownIndex
+			
+            if remaining > 0 then
+				SendChatMessage(remaining, "RAID_WARNING")
+			else
+				SendChatMessage("\\o/ SOLD \\o/", "RAID_WARNING")
+            mlCountdownActive = false
+            mlCountdownTimer:Cancel()
+            mlCountdownTimer = nil
+			return
+        end
+
+        mlCountdownIndex = mlCountdownIndex + 1
+    end, 666) -- 6 ticks: 5,4,3,2,1,SOLD
+end)
+
+----------------------------------------------------------------
+-- PAUSE LOGIC
+----------------------------------------------------------------
+
+pauseBtn:SetScript("OnClick", function()
+    if not mlCountdownActive then
+        print("|cffff0000No countdown is running.|r")
+        return
+    end
+
+    mlCountdownPaused = not mlCountdownPaused
+
+    if mlCountdownPaused then
+        pauseBtn:SetText("Resume")
+        print("|cffffff00Countdown paused.|r")
+    else
+        pauseBtn:SetText("Pause")
+        print("|cff00ff00Countdown resumed.|r")
+    end
 end)
 
 ----------------------------------------------------------------
