@@ -19,10 +19,8 @@ Features to deliver ASAP:
 
 Outstanding bugs:
 * Force sync isnt showing editor response from Luna
-* DKP table version display / update not all there (editors only)
 * Check that if force sync is declined or fails, sync information reflects this (maybe add "last sync status"?)
-* Sync status shouldnt be orange for editor with highest version
-* Addon users should only count mains
+* Refinement needed to Sync status for editors to find the highest version recorded for dkp table
   
 
 Ideas for future releases (significant work):
@@ -33,7 +31,22 @@ Ideas for future releases (significant work):
 * are you back check?
 
 
+
+
 -------------------------------------------------------
+
+1.9.69 Changelog
+-------------------------------------------------------
+Added features:
+* New Countdown button on ML tab
+
+
+Bugs squashed:
+*  DKP Table version wrong on force sync
+*  Fixed sync addon users counter
+
+
+
 1.8.69 Changelog
 -------------------------------------------------------
 Bugs squashed:
