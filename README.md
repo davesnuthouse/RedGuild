@@ -6,6 +6,7 @@ NOTE - YOU SHOULD ONLY USE THE RELEASE VERSION ON CURSEFORGE.  THE LUA LISTED HE
 
 Required urgently:
 * Prevent out of date editors from syncing at all
+* Warnins on functions that change dkp table version to advise editor they aren't the highest version
 * A bold change to improve sync efficiency (might brake everything so held off for now)
 
 Features to deliver ASAP:
