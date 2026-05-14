@@ -12,7 +12,7 @@ RedGuild_Audit  	= RedGuild_Audit  or {}
 RedGuild_Usage  	= RedGuild_Usage  or {}
 
 local addonName      = ...
-local REDGUILD_VERSION = "1.9.69"
+local REDGUILD_VERSION = "1.10.69"
 
 local REDGUILD_CHAT_PREFIX = "REDGUILD"
 
@@ -2261,16 +2261,18 @@ GameTooltip:AddLine("|cffffffffAddon users: |r" .. online .. " / " .. total)
     GameTooltip:AddLine(" ")
 
 -- DKP sync
-GameTooltip:AddLine("|cffffff00DKP Sync|r")
+GameTooltip:AddLine("|cffffff00DKP Data|r")
 GameTooltip:AddLine("|cffffffffLast: |r" .. ColourForSyncAge(RedGuild_Config.lastDKPSync or "Never"))
 GameTooltip:AddLine("|cffffffffFrom: |r" .. (RedGuild_Config.lastDKPSyncFrom or "?"))
-GameTooltip:AddLine("|cffffffffYour DKP Version: |r" .. (RedGuild_Config.dkpVersion or "?"))
+--    GameTooltip:AddLine("|cffffffffHighest version: |r" .. (RedGuild_Config.dkpVersion or "?"))
+GameTooltip:AddLine("|cffffffffYour version: |r" .. (RedGuild_Config.dkpVersion or "?"))
 GameTooltip:AddLine(" ")
 
 -- Alt sync
 GameTooltip:AddLine("|cffffff00Alt Tracker Sync|r")
 GameTooltip:AddLine("|cffffffffLast: |r" .. ColourForSyncAge(RedGuild_Config.lastAltSync or "Never"))
 GameTooltip:AddLine("|cffffffffFrom: |r" .. (RedGuild_Config.lastAltSyncFrom or "?"))
+GameTooltip:AddLine("|cffffffffVersion: |r" .. (RedGuild_Config.altsVersion or "?"))
 GameTooltip:AddLine(" ")
 
 -- Editor sync
@@ -6606,48 +6608,59 @@ if event == "CHAT_MSG_ADDON" then
 
     if pfx3 == REDGUILD_CHAT_PREFIX then
         -- ALT SYNC: REQUEST SNAPSHOT
-if altType == "ALTS_REQ" then
-    local requester = altPayload
-    if not requester or requester == "" then
-        requester = sender
-    end
+		if altType == "ALTS_REQ" then
+			local requester = altPayload
+			local requesterVer = tonumber(RedGuild_Config.EditorVersions and RedGuild_Config.EditorVersions[NormalizeName(requester)] or 0)
+			local myVer        = tonumber(RedGuild_Config.altsVersion or 0)
 
-    local snapshot = BuildAltSnapshot()
-    local encoded  = EncodePayload(snapshot)
+			if not requester or requester == "" then
+				requester = sender
+			end    
 
-    -- send via chunked path
-    RedGuild_Send("ALTS", encoded, requester)
-    return
-end
+			if myVer <= requesterVer then
+				return  -- requester already has equal or newer data
+			end
+	
+			local snapshot = BuildAltSnapshot()
+			local encoded  = EncodePayload(snapshot)
+
+			-- send via chunked path
+			RedGuild_Send("ALTS", encoded, requester)
+			return
+		end
 
         -- ALT SYNC: RECEIVE SNAPSHOT
-        if altType == "ALTS_DATA" then
-            local ok, snapshot = pcall(DecodePayload, altPayload)
-            if ok then
-                ApplyAltSnapshot(snapshot)
-                RefreshMainsList()
-                UpdateTopBar()
-            end
-			RedGuild_Config.lastAltSync     = date("%Y-%m-%d %H:%M:%S")
-			RedGuild_Config.lastAltSyncFrom = sender
-			UpdateSyncStatus()
-            return
-        end
+		if altType == "ALTS_DATA" then
+			local ok, snapshot = pcall(DecodePayload, altPayload)
+			if ok and type(snapshot) == "table" then
+				local incoming = tonumber(snapshot.version or 0)
+				local localVer = tonumber(RedGuild_Config.altsVersion or 0)
+
+				if incoming > localVer then
+					ApplyAltSnapshot(snapshot)
+					RedGuild_Config.altsVersion = incoming
+					RefreshMainsList()
+					UpdateTopBar()
+				end
+			end
+		end
+
 
         -- ALT SYNC: PER-FIELD UPDATE
-        if altType == "ALTS_UPDATE" then
-            local ok, update = pcall(DecodePayload, altPayload)
-            if ok then
-                ApplyAltFieldUpdate(update)
-                RefreshMainsList()
-                UpdateTopBar()
-            end
-            RedGuild_Config.lastAltSync     = date("%Y-%m-%d %H:%M:%S")
-			RedGuild_Config.lastAltSyncFrom = sender
-			UpdateSyncStatus()
-			return
-        end
-    end
+		if altType == "ALTS_UPDATE" then
+			local ok, update = pcall(DecodePayload, altPayload)
+			if ok and type(update) == "table" then
+				local incoming = tonumber(update.version or 0)
+				local localVer = tonumber(RedGuild_Config.altsVersion or 0)
+
+				if incoming > localVer then
+					ApplyAltFieldUpdate(update)
+					RefreshMainsList()
+					UpdateTopBar()
+				end
+			end
+		end
+	end
 
     ---------------------------------------------------------
     -- SIMPLE MESSAGES (EDITORREQ / REQUEST / VERSION / FORCE_* etc.)
