@@ -36,6 +36,13 @@ Ideas for future releases (significant work):
 
 -------------------------------------------------------
 
+1.10.69 Changelog
+-------------------------------------------------------
+Added features:
+* Version control on Alt Tracker to try to improve sync lag
+
+
+
 1.9.69 Changelog
 -------------------------------------------------------
 Added features:
