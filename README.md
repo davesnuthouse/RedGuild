@@ -15,6 +15,7 @@ Features to deliver ASAP:
 * Use alt data for editors to remove their alts from sync (better data integrity)
 * Add a small sync to check table version between non editors and colour the sync info if out of date
 * Add RW countdown timer to ML tab
+* show only online on the alt tracker
 
 
 Outstanding bugs:
