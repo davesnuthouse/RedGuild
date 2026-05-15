@@ -21,6 +21,7 @@ Outstanding bugs:
 * Force sync isnt showing editor response from Luna
 * Check that if force sync is declined or fails, sync information reflects this (maybe add "last sync status"?)
 * Refinement needed to Sync status for editors to find the highest version recorded for dkp table
+* Not technically a bug but highest version isnt retained after logoff for sync info
   
 
 Ideas for future releases (significant work):
