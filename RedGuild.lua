@@ -12,7 +12,7 @@ RedGuild_Audit  	= RedGuild_Audit  or {}
 RedGuild_Usage  	= RedGuild_Usage  or {}
 
 local addonName      = ...
-local REDGUILD_VERSION = "1.12.69"
+local REDGUILD_VERSION = "1.13.69"
 
 local REDGUILD_CHAT_PREFIX = "REDGUILD"
 
@@ -6765,7 +6765,7 @@ if simpleType == "VERSIONREP" then
 	-- NEW: Global version check (you vs newest in guild)
 
     local newest = GetNewestVersion()
-    if newest and newest ~= "" and REDGUILD_VERSION ~= newest then
+    if newest and newest ~= "" and CompareVersions(REDGUILD_VERSION, newest) then
         if not RedGuild_Config.seenNewerVersion then
             RedGuild_Config.seenNewerVersion = true
             Print(string.format(
