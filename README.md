@@ -36,6 +36,14 @@ Ideas for future releases (significant work):
 
 -------------------------------------------------------
 
+1.13.69 Changelog
+-------------------------------------------------------
+Bugs squashed:
+*  Fix incorrect status message about being out of date on best version
+
+
+
+
 1.12.69 Changelog
 -------------------------------------------------------
 Added features:
