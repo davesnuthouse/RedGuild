@@ -12,7 +12,7 @@ RedGuild_Audit  	= RedGuild_Audit  or {}
 RedGuild_Usage  	= RedGuild_Usage  or {}
 
 local addonName      = ...
-local REDGUILD_VERSION = "1.10.69"
+local REDGUILD_VERSION = "1.12.69"
 
 local REDGUILD_CHAT_PREFIX = "REDGUILD"
 
@@ -873,21 +873,55 @@ local function CompareVersions(localVer, remoteVer)
     return rc > lc
 end
 
+local function GetNewestVersion()
+    local addonVersions = RedGuild_Config.AddonVersions or {}
+    local newest = nil
+
+    for name, ver in pairs(addonVersions) do
+        if not newest or CompareVersions(newest, ver) then
+            newest = ver
+        end
+    end
+
+    return newest
+end
+
 local function CountOutdatedUsers()
-
-    if not RedGuild_Config.AddonVersions then
-        return 0
-    end
-
+    local addonVersions = RedGuild_Config.AddonVersions or {}
+    local newest = GetNewestVersion()
+    local accountVersions = {}
     local count = 0
-    local latest = REDGUILD_VERSION
 
-    if not RedGuild_Config.AddonVersions then
-        return 0
+    -- Collapse alts → mains and track highest version per account
+    for main, altList in pairs(RedGuild_Alts or {}) do
+        local normMain = NormalizeName(main)
+
+        -- Start with main's version
+        local best = addonVersions[normMain]
+
+        -- Check alts for higher version
+        for _, alt in ipairs(altList) do
+            local normAlt = NormalizeName(alt)
+            local altVer = addonVersions[normAlt]
+
+            if altVer and best then
+                if CompareVersions(best, altVer) then
+                    best = altVer
+                end
+            elseif altVer then
+                best = altVer
+            end
+        end
+
+        -- Store highest version for this account
+        if best then
+            accountVersions[normMain] = best
+        end
     end
 
-    for name, ver in pairs(RedGuild_Config.AddonVersions or {}) do
-        if CompareVersions(latest, ver) then
+    -- Count outdated accounts
+    for main, ver in pairs(accountVersions) do
+        if ver ~= newest then
             count = count + 1
         end
     end
@@ -2264,7 +2298,12 @@ GameTooltip:AddLine("|cffffffffAddon users: |r" .. online .. " / " .. total)
 GameTooltip:AddLine("|cffffff00DKP Data|r")
 GameTooltip:AddLine("|cffffffffLast: |r" .. ColourForSyncAge(RedGuild_Config.lastDKPSync or "Never"))
 GameTooltip:AddLine("|cffffffffFrom: |r" .. (RedGuild_Config.lastDKPSyncFrom or "?"))
---    GameTooltip:AddLine("|cffffffffHighest version: |r" .. (RedGuild_Config.dkpVersion or "?"))
+local bestEditor, bestVersion = GetHighestVersionEditor()
+	if bestEditor and bestVersion then
+		GameTooltip:AddLine("|cffffffffHighest version: |r" .. bestVersion .. " (" .. bestEditor .. ")")
+	else
+		GameTooltip:AddLine("|cffffffffHighest version: |r?")
+	end
 GameTooltip:AddLine("|cffffffffYour version: |r" .. (RedGuild_Config.dkpVersion or "?"))
 GameTooltip:AddLine(" ")
 
@@ -6714,6 +6753,7 @@ if simpleType == "VERSIONREP" then
 	-- Convert version to number
     local remoteVer = simplePayload or ""
 	
+	-- Store Version
 	RedGuild_Config.AddonVersions = RedGuild_Config.AddonVersions or {}
     RedGuild_Config.AddonVersions[key] = remoteVer
 
@@ -6721,6 +6761,19 @@ if simpleType == "VERSIONREP" then
     RedGuild_Config.lastVersionSync = date("%Y-%m-%d %H:%M:%S")
     RedGuild_Config.lastVersionSyncFrom = sender
     UpdateSyncStatus()
+	
+	-- NEW: Global version check (you vs newest in guild)
+
+    local newest = GetNewestVersion()
+    if newest and newest ~= "" and REDGUILD_VERSION ~= newest then
+        if not RedGuild_Config.seenNewerVersion then
+            RedGuild_Config.seenNewerVersion = true
+            Print(string.format(
+                "Your RedGuild addon is out of date. Latest version: %s (you are on %s)",
+                newest, REDGUILD_VERSION
+            ))
+        end
+    end
 	
     -- Notify user if newer version exists
     if remoteVer ~= "" and CompareVersions(REDGUILD_VERSION, remoteVer) then
@@ -6841,7 +6894,7 @@ SlashCmdList["REDGUILD"] = function(msg)
         print("|cffffd100RedGuild Commands:|r")
         print("|cff00ff00/redguild show|r   - Open the DKP window")
         print("|cff00ff00/redguild hide|r   - Hide the DKP window")
-        print("|cff00ff00/redguild toggle|r - Toggle the DKP window")
+		print("|cff00ff00/redguild toggle|r - Toggle the DKP window")
         print("|cff00ff00/redguild minimap|r - Reset minimap icon position")
         print("|cff00ff00/redguild help|r   - Show this help list")
         return

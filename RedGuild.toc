@@ -1,7 +1,7 @@
 ## Interface: 20505
 ## Title: RedGuild
 ## Author: Lunátic
-## Version: 1.10.69
+## Version: 1.12.69
 ## Notes: Distributed DKP with audit log, undo, and sync
 ## SavedVariables: RedGuild_Data, RedGuild_BackupData, RedGuild_Config, RedGuild_Audit, RedGuild_ML, RedGuild_Alts, RedGuild_AltParent, RedGuild_Editors
 ## OptionalDeps: LibStub, LibSerialize, LibDeflate
