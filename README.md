@@ -6,7 +6,7 @@ NOTE - YOU SHOULD ONLY USE THE RELEASE VERSION ON CURSEFORGE.  THE LUA LISTED HE
 
 Required urgently:
 * Prevent out of date editors from syncing at all
-* Warnins on functions that change dkp table version to advise editor they aren't the highest version
+* Warnings on functions that change dkp table version to advise editor they aren't the highest version
 * A bold change to improve sync efficiency (might brake everything so held off for now)
 
 Features to deliver ASAP:
@@ -14,7 +14,6 @@ Features to deliver ASAP:
 * Revisit audit log completely (might be better after the dkp save change)
 * Use alt data for editors to remove their alts from sync (better data integrity)
 * Add a small sync to check table version between non editors and colour the sync info if out of date
-* Sync info to show out of date addon users count
 * Add RW countdown timer to ML tab
 
 
@@ -36,9 +35,21 @@ Ideas for future releases (significant work):
 
 -------------------------------------------------------
 
+1.12.69 Changelog
+-------------------------------------------------------
+Added features:
+* Sync info now shows highest known dkp table version
+
+
+Bugs squashed:
+*  Out of date addon users functions/calculates properly
+
+
 1.11.69 Changelog
 -------------------------------------------------------
 Same as 1.10.69 (thanks curse)
+
+
 
 1.10.69 Changelog
 -------------------------------------------------------
