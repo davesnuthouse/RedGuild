@@ -37,11 +37,18 @@ Ideas for future releases (significant work):
 
 -------------------------------------------------------
 
+1.14.69 Changelog
+-------------------------------------------------------
+
+Bugs squashed:
+*  Yet another attempt to reduce addon lag
+
+
+
 1.13.69 Changelog
 -------------------------------------------------------
 Bugs squashed:
 *  Fix incorrect status message about being out of date on best version
-
 
 
 
