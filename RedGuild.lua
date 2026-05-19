@@ -12,7 +12,7 @@ RedGuild_Audit  	= RedGuild_Audit  or {}
 RedGuild_Usage  	= RedGuild_Usage  or {}
 
 local addonName      = ...
-local REDGUILD_VERSION = "1.13.69"
+local REDGUILD_VERSION = "1.14.69"
 
 local REDGUILD_CHAT_PREFIX = "REDGUILD"
 
@@ -128,6 +128,30 @@ end
 -- SYNC HELPERS
 --------------------------------------------------
 
+local function GetHighestAltVersionUser()
+    local bestUser = nil
+    local bestVer = -1
+
+    for name, ver in pairs(RedGuild_Config.altsVersionByUser or {}) do
+        if IsAddonUserOnlineForTooltip(name) then
+            local nver = tonumber(ver) or 0
+
+            if nver > bestVer then
+                bestVer = nver
+                bestUser = name
+
+            elseif nver == bestVer then
+                -- alphabetical tie-breaker
+                if bestUser == nil or name < bestUser then
+                    bestUser = name
+                end
+            end
+        end
+    end
+
+    return bestUser, bestVer
+end
+
 local function GetSyncAgeState(timestamp)
     if not timestamp or timestamp == "Never" then
         return "red"
@@ -223,7 +247,7 @@ function UpdateSyncStatus()
     end
 
     ----------------------------------------------------------------
-    -- EXISTING PRIORITY SYSTEM (now works correctly)
+    -- PRIORITY SYSTEM
     ----------------------------------------------------------------
 
     if dkpState == "red" or altState == "red" or editorState == "red" then
@@ -6646,25 +6670,27 @@ if event == "CHAT_MSG_ADDON" then
         msg:match("^([^:]+):([^:]+):(.*)$")
 
     if pfx3 == REDGUILD_CHAT_PREFIX then
-        -- ALT SYNC: REQUEST SNAPSHOT
+    
+		-- ALT SYNC: REQUEST SNAPSHOT
 		if altType == "ALTS_REQ" then
 			local requester = altPayload
-			local requesterVer = tonumber(RedGuild_Config.EditorVersions and RedGuild_Config.EditorVersions[NormalizeName(requester)] or 0)
-			local myVer        = tonumber(RedGuild_Config.altsVersion or 0)
-
 			if not requester or requester == "" then
 				requester = sender
-			end    
-
-			if myVer <= requesterVer then
-				return  -- requester already has equal or newer data
 			end
-	
-			local snapshot = BuildAltSnapshot()
-			local encoded  = EncodePayload(snapshot)
 
-			-- send via chunked path
-			RedGuild_Send("ALTS", encoded, requester)
+			local requesterVer = tonumber(RedGuild_Config.altsVersionByUser and RedGuild_Config.altsVersionByUser[NormalizeName(requester)] or 0)
+
+			-- Determine the highest-version alt-data user
+			local bestUser, bestVer = GetHighestAltVersionUser()
+
+			-- Only the highest-version user responds, and only if newer than requester
+			if bestUser and NormalizeName(bestUser) == NormalizeName(UnitName("player")) then
+				if bestVer > requesterVer then
+					local snapshot = BuildAltSnapshot()
+					local encoded  = EncodePayload(snapshot)
+					RedGuild_Send("ALTS", encoded, requester)
+				end
+			end
 			return
 		end
 
@@ -6674,6 +6700,9 @@ if event == "CHAT_MSG_ADDON" then
 			if ok and type(snapshot) == "table" then
 				local incoming = tonumber(snapshot.version or 0)
 				local localVer = tonumber(RedGuild_Config.altsVersion or 0)
+				
+				RedGuild_Config.altsVersionByUser = RedGuild_Config.altsVersionByUser or {}
+				RedGuild_Config.altsVersionByUser[NormalizeName(sender)] = incoming
 
 				if incoming > localVer then
 					ApplyAltSnapshot(snapshot)
@@ -6691,6 +6720,9 @@ if event == "CHAT_MSG_ADDON" then
 			if ok and type(update) == "table" then
 				local incoming = tonumber(update.version or 0)
 				local localVer = tonumber(RedGuild_Config.altsVersion or 0)
+				
+				RedGuild_Config.altsVersionByUser = RedGuild_Config.altsVersionByUser or {}
+				RedGuild_Config.altsVersionByUser[NormalizeName(sender)] = incoming
 
 				if incoming > localVer then
 					ApplyAltFieldUpdate(update)
