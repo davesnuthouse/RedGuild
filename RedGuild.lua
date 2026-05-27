@@ -12,7 +12,7 @@ RedGuild_Audit  	= RedGuild_Audit  or {}
 RedGuild_Usage  	= RedGuild_Usage  or {}
 
 local addonName      = ...
-local REDGUILD_VERSION = "1.14.69"
+local REDGUILD_VERSION = "1.15.69"
 
 local REDGUILD_CHAT_PREFIX = "REDGUILD"
 
@@ -100,6 +100,39 @@ local function Print(msg)
     DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00[RedGuild]|r " .. tostring(msg))
 end
 
+local function NormalizeName(name)
+    if not name then return nil end
+
+    -- Remove realm suffix
+    name = Ambiguate(name, "short")
+    if not name or name == "" then return nil end
+
+    -- Strip leading/trailing whitespace
+    name = name:gsub("^%s*(.-)%s*$", "%1")
+
+    -- Lowercase + remove spaces
+    name = name:lower():gsub("%s+", "")
+
+    return name
+end
+
+local function IsAddonUserOnlineForTooltip(name)
+    local target = NormalizeName(name)
+    if not target or not IsInGuild() then
+        return false
+    end
+
+    local num = GetNumGuildMembers()
+    for i = 1, num do
+        local gName, _, _, _, _, _, _, _, online = GetGuildRosterInfo(i)
+        if gName and NormalizeName(gName) == target then
+            return online
+        end
+    end
+
+    return false
+end
+
 --------------------------------------------------
 -- Classic-family Compatibility Layer
 --------------------------------------------------
@@ -123,7 +156,6 @@ function RedGuild_Invite(name)
         return C_PartyInfo.InviteUnit(name)
     end
 end
-
 --------------------------------------------------
 -- SYNC HELPERS
 --------------------------------------------------
@@ -719,39 +751,6 @@ local function ColorizeBalance(d)
     else
         return tostring(balance)                 -- white/neutral
     end
-end
-
-local function NormalizeName(name)
-    if not name then return nil end
-
-    -- Remove realm suffix
-    name = Ambiguate(name, "short")
-    if not name or name == "" then return nil end
-
-    -- Strip leading/trailing whitespace
-    name = name:gsub("^%s*(.-)%s*$", "%1")
-
-    -- Lowercase + remove spaces
-    name = name:lower():gsub("%s+", "")
-
-    return name
-end
-
-local function IsAddonUserOnlineForTooltip(name)
-    local target = NormalizeName(name)
-    if not target or not IsInGuild() then
-        return false
-    end
-
-    local num = GetNumGuildMembers()
-    for i = 1, num do
-        local gName, _, _, _, _, _, _, _, online = GetGuildRosterInfo(i)
-        if gName and NormalizeName(gName) == target then
-            return online
-        end
-    end
-
-    return false
 end
 
 local function IsAuthorized()
