@@ -37,6 +37,13 @@ Ideas for future releases (significant work):
 
 -------------------------------------------------------
 
+1.15.69 Changelog
+-------------------------------------------------------
+
+Bugs squashed:
+*  Fixing crash after lag fix when calls alt editors too fast
+
+
 1.14.69 Changelog
 -------------------------------------------------------
 
