@@ -7,7 +7,6 @@ NOTE - YOU SHOULD ONLY USE THE RELEASE VERSION ON CURSEFORGE.  THE LUA LISTED HE
 Required urgently:
 * Prevent out of date editors from syncing at all
 * Warnings on functions that change dkp table version to advise editor they aren't the highest version
-* A bold change to improve sync efficiency (might brake everything so held off for now)
 
 Features to deliver ASAP:
 * Redo the way DKP table saves to a single button commit (hook into editor rollback funcitonality)
@@ -33,6 +32,23 @@ Ideas for future releases (significant work):
 * are you back check?
 
 
+
+-------------------------------------------------------
+
+1.16.69 Changelog
+-------------------------------------------------------
+Added features:
+* Version check for new WoW client updated to 2.5.6 for LOODA
+* ML scorecard "show group/raid" displays players not on dkp table
+* Show only me added to DKP table
+* Show Group/Raid function opened to all users on DKP table
+* All DKP table users now show, mains alts(~) and non guild(-)
+
+Removed features:
+* Inactive functionality removed
+  
+Bugs squashed:
+*  Sadly the scroll bug continues to elude me despite days of effort, will continue to work on this for next version
 
 
 -------------------------------------------------------
