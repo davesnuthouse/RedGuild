@@ -15,14 +15,12 @@ Features to deliver ASAP:
 * Add a small sync to check table version between non editors and colour the sync info if out of date
 * Add RW countdown timer to ML tab
 * show only online on the alt tracker
+* Refinement needed to Sync status for editors to find the highest version recorded for dkp table
 
+Major bugs:
+* DKP table continues to drop entries when you scroll.  Multiple attempts to fix have failed, requires significant code change at this point.
 
 Outstanding bugs:
-* Force sync isnt showing editor response from Luna
-* Check that if force sync is declined or fails, sync information reflects this (maybe add "last sync status"?)
-* Refinement needed to Sync status for editors to find the highest version recorded for dkp table
-* Not technically a bug but highest version isnt retained after logoff for sync info
-  
 
 Ideas for future releases (significant work):
 * Colour coding in the logs to make them easier to read
