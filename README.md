@@ -18,7 +18,7 @@ Features to deliver ASAP:
 * Refinement needed to Sync status for editors to find the highest version recorded for dkp table
 
 Major bugs:
-* DKP table continues to drop entries when you scroll.  Multiple attempts to fix have failed, requires significant code change at this point.
+
 
 Outstanding bugs:
 
@@ -46,7 +46,7 @@ Removed features:
 * Inactive functionality removed
   
 Bugs squashed:
-*  Sadly the scroll bug continues to elude me despite days of effort, will continue to work on this for next version
+*  Scroll bug on DKP squashed by CELERY!!!
 
 
 -------------------------------------------------------
