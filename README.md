@@ -21,7 +21,7 @@ Major bugs:
 
 
 Outstanding bugs:
-* After "fixing" Alt Tracker sync it definitely does not do what it was designed to so requires more work whilst not reverting the changes that stopped it causing lag
+
 
 Ideas for future releases (significant work):
 * Colour coding in the logs to make them easier to read
@@ -50,6 +50,7 @@ Removed features:
   
 Bugs squashed:
 *  Scroll bug on DKP squashed by CELERY!!!
+*  Alt tracker sync reenabled, hopefully fixed against the lag spike issue
 
 
 -------------------------------------------------------
