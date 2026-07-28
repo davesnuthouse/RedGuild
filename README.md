@@ -21,6 +21,7 @@ Major bugs:
 
 
 Outstanding bugs:
+* After "fixing" Alt Tracker sync it definitely does not do what it was designed to so requires more work whilst not reverting the changes that stopped it causing lag
 
 Ideas for future releases (significant work):
 * Colour coding in the logs to make them easier to read
@@ -40,7 +41,9 @@ Added features:
 * ML scorecard "show group/raid" displays players not on dkp table
 * Show only me added to DKP table
 * Show Group/Raid function opened to all users on DKP table
-* All DKP table users now show, mains alts(~) and non guild(-)
+* All DKP table users now show, mains alts(~) and non guild(-) (editors only)
+* ML scorecard tidied up back to just MS and OS, now shows mains and alts beside names
+* Audit table now trims itself to last 30 days
 
 Removed features:
 * Inactive functionality removed
