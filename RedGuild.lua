@@ -12,7 +12,7 @@ RedGuild_Audit  	= RedGuild_Audit  or {}
 RedGuild_Usage  	= RedGuild_Usage  or {}
 
 local addonName      = ...
-local REDGUILD_VERSION = "1.15.69"
+local REDGUILD_VERSION = "1.16.69"
 
 local REDGUILD_CHAT_PREFIX = "REDGUILD"
 
@@ -173,8 +173,11 @@ local function GetHighestAltVersionUser()
                 bestUser = name
 
             elseif nver == bestVer then
-                -- alphabetical tie-breaker
-                if bestUser == nil or name < bestUser then
+                -- alphabetical tie-breaker (normalized)
+                local normName     = NormalizeName(name)
+                local normBestUser = NormalizeName(bestUser)
+
+                if normBestUser == nil or normName < normBestUser then
                     bestUser = name
                 end
             end
@@ -394,10 +397,14 @@ end
 function RedGuild_Send(msgType, payload, target)
     if not msgType then return end
 	
-	-- Block all outbound sync if user opted out
-    if RedGuild_Config.hideMeFromSync then
+-- DKP sync opt-out should NOT block Alt Tracker sync
+if RedGuild_Config.hideMeFromSync then
+    if msgType ~= "ALTS_REQ" and
+       msgType ~= "ALTS_DATA" and
+       msgType ~= "ALTS_UPDATE" then
         return
     end
+end
 	
     payload = payload or ""
 
@@ -482,34 +489,36 @@ local function EnsureConfig()
     end
 end
 
-local function EnsurePlayer(name)
-    RedGuild_Data[name] = RedGuild_Data[name] or {
+function EnsurePlayer(name)
+    -- Normalize name
+    name = Ambiguate(name, "short") or name
+
+    -- If record exists, return it
+    local d = RedGuild_Data[name]
+    if d then return d end
+
+    -- Create a safe, complete DKP record
+    d = {
+        class      = "UNKNOWN",
+        msRole     = "UNKNOWN",
+        osRole     = "UNKNOWN",
         lastWeek   = 0,
         onTime     = 0,
         attendance = 0,
         bench      = 0,
         spent      = 0,
-        balance    = 0,
-		rotated    = 0,
-        class      = nil,
-		inactive   = false,
+        rotated    = 0,
     }
-	
-	-- MIGRATION: convert old boolean rotated values
-    if RedGuild_Data[name].rotated == false then
-        RedGuild_Data[name].rotated = 0
-    end
-	
-    return RedGuild_Data[name]
+
+    RedGuild_Data[name] = d
+    return d
 end
 
 local function EnsureML(name)
     if not RedGuild_ML[name] then
         RedGuild_ML[name] = {
             mlMainMS = 0,   -- Main (MS)
-            mlAltMS  = 0,   -- Alt  (MS)
             mlMainOS = 0,   -- Main (OS)
-            mlAltOS  = 0,   -- Alt  (OS)
             mlNotes  = "",
         }
     end
@@ -1370,8 +1379,13 @@ function CreateDKPRow()
     row.deleteButton = delBtn
 
     -- Only hide for non‑editors (NOT for lock state)
-    if not IsEditor(UnitName("player")) then
-        row.deleteButton:Hide()
+	
+	if not IsEditor(UnitName("player")) then
+        if dkpLocked then
+			row.deleteButton:Hide()
+		else
+			row.deleteButton:Show()
+		end
     end
 
 	-- DELETE/INACTIVE BUTTON
@@ -1385,32 +1399,9 @@ function CreateDKPRow()
 		local player = row.name
 		if not player then return end
 
-		StaticPopup_Show("REDGUILD_INACTIVE_OR_DELETE", player, nil, player)
+		StaticPopup_Show("REDGUILD_DELETE_PLAYER", player, nil, player)
 	end)
 	
-	-- REACTIVATE BUTTON (hidden by default)
-	local reactBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
-	reactBtn:SetSize(15, 15)
-	reactBtn:SetPoint("LEFT", delBtn, "LEFT", 0, 0)
-	reactBtn:SetText("+")
-	reactBtn:Hide()
-	row.reactivateButton = reactBtn
-
-	reactBtn:SetScript("OnClick", function()
-		if dkpLocked then return end
-		if not IsAuthorized() then return end
-
-		local player = row.name
-		if not player then return end
-
-		local d = RedGuild_Data[player]
-		if not d then return end
-
-		d.inactive = false
-		BumpDKPVersion()
-		UpdateTable()
-	end)
-
     -- COLUMNS
     row.cols = {}
     local colX = 30
@@ -1811,19 +1802,20 @@ function UpdateTable()
     end
 
     ----------------------------------------------------------------
-    -- FILTER
+    -- FILTER (NO INVALID / INACTIVE / HIDDEN LOGIC)
     ----------------------------------------------------------------
     local filtered = {}
 
     for _, name in ipairs(allNames) do
-        local d = RedGuild_Data[name]
-        local isInvalid = RuntimeInvalid(name)
-        local isInactive = d and d.inactive
+        table.insert(filtered, name)
+    end
 
-        if (not isInvalid or showHiddenRecords)
-        and (not isInactive or showHiddenRecords) then
-            table.insert(filtered, name)
-        end
+    ----------------------------------------------------------------
+    -- SHOW ONLY ME FILTER
+    ----------------------------------------------------------------
+    if dkpShowOnlyMe then
+        local me = Ambiguate(UnitName("player"), "short")
+        filtered = { me }
     end
 
     ----------------------------------------------------------------
@@ -1874,14 +1866,10 @@ function UpdateTable()
     -- SORT
     ----------------------------------------------------------------
     table.sort(filtered, function(a, b)
-        -- Hard safety
         if not a and not b then return false end
         if not a then return false end
         if not b then return true end
 
-        --------------------------------------------------------
-        -- NAME SORT
-        --------------------------------------------------------
         if currentSortField == "name" then
             if currentSortAscending then
                 return tostring(a) < tostring(b)
@@ -1890,14 +1878,10 @@ function UpdateTable()
             end
         end
 
-        --------------------------------------------------------
-        -- DATA SORT
-        --------------------------------------------------------
         local da = RedGuild_Data[a] or {}
         local db = RedGuild_Data[b] or {}
 
         local field = currentSortField
-
         local va, vb
 
         if field == "msRole" or field == "osRole" then
@@ -1911,7 +1895,6 @@ function UpdateTable()
             vb = tonumber(db[field]) or 0
         end
 
-        -- Primary comparison
         if va ~= vb then
             if currentSortAscending then
                 return va < vb
@@ -1920,7 +1903,6 @@ function UpdateTable()
             end
         end
 
-        -- Tie-breaker (ALWAYS BOOLEAN)
         return tostring(a) < tostring(b)
     end)
 
@@ -1931,21 +1913,18 @@ function UpdateTable()
     local totalRows = #dkpSortedNames
 
     ----------------------------------------------------------------
-    -- SCROLL + VIEWPORT
+    -- SCROLL + VIEWPORT (18px aligned)
     ----------------------------------------------------------------
-    local rowHeight = ROW_HEIGHT or 18
+    local rowHeight      = ROW_HEIGHT or 18
     local viewportHeight = dkpScroll:GetHeight() or 300
-    local maxVisibleRows = math.floor(viewportHeight / rowHeight) + 1
+    local maxVisibleRows = math.floor(viewportHeight / rowHeight)
 
-    -- Get current scroll safely
-    local scrollPos = dkpScroll:GetVerticalScroll() or 0
-
-    -- Convert to row offset
-    local offset = math.floor(scrollPos / rowHeight)
-
-    -- Clamp offset (prevents missing rows at bottom)
+    -- Correct maxOffset (row-based, not pixel-based)
     local maxOffset = math.max(0, totalRows - maxVisibleRows)
-    offset = math.max(0, math.min(offset, maxOffset))
+
+    local scrollPos = dkpScroll:GetVerticalScroll() or 0
+    local offset    = math.floor(scrollPos / rowHeight)
+    offset = math.max(0, math.min(offset, totalRows - maxVisibleRows))
 
     ----------------------------------------------------------------
     -- ENSURE ROWS EXIST
@@ -1964,12 +1943,25 @@ function UpdateTable()
         if dataIndex <= totalRows then
             local name = dkpSortedNames[dataIndex]
             local d = RedGuild_Data[name] or EnsurePlayer(name)
+			
+			-- Normalize missing fields
+			d.class      = d.class      or "UNKNOWN"
+			d.msRole     = d.msRole     or "UNKNOWN"
+			d.osRole     = d.osRole     or "UNKNOWN"
+			d.lastWeek   = d.lastWeek   or 0
+			d.onTime     = d.onTime     or 0
+			d.attendance = d.attendance or 0
+			d.bench      = d.bench      or 0
+			d.spent      = d.spent      or 0
+			d.rotated    = d.rotated    or 0
+			d.balance    = d.balance    or 0
 
             row.name = name
             row.index = dataIndex
 
             row:Show()
-            row:SetPoint("TOPLEFT", dkpScrollChild, "TOPLEFT", 0, -(i - 1) * rowHeight)
+			row:SetPoint("TOPLEFT", dkpScrollChild, "TOPLEFT", 0, -(dataIndex - 1) * rowHeight) 
+            row:SetParent(dkpScrollChild)
 
             RecalcBalance(d)
 
@@ -1979,15 +1971,8 @@ function UpdateTable()
             if row.deleteButton and row.reactivateButton then
                 if dkpLocked or not IsEditor(UnitName("player")) then
                     row.deleteButton:Hide()
-                    row.reactivateButton:Hide()
                 else
-                    if d.inactive then
-                        row.deleteButton:Hide()
-                        row.reactivateButton:Show()
-                    else
-                        row.deleteButton:Show()
-                        row.reactivateButton:Hide()
-                    end
+                    row.deleteButton:Show()
                 end
             end
 
@@ -2002,9 +1987,16 @@ function UpdateTable()
             if row.tellButton then
                 row.tellButton:Show()
             end
+			
+			-- DELETE BUTTON VISIBILITY
+			if dkpLocked or not IsEditor(UnitName("player")) then
+				row.deleteButton:Hide()
+			else
+				row.deleteButton:Show()
+			end
 
             --------------------------------------------------------
-            -- DISPLAY
+            -- DISPLAY NAME (alt + not-in-guild markers)
             --------------------------------------------------------
             local classColor = "|cffffffff"
             if d.class then
@@ -2016,24 +2008,19 @@ function UpdateTable()
             end
 
             local displayName = name
-            if RuntimeInvalid(name) then
-                displayName = "|cffff0000-|r " .. displayName
+
+            -- ALT MARKER
+            local isAlt = RedGuild_AltParent[name] and RedGuild_AltParent[name] ~= name
+            if isAlt then
+                displayName = "~" .. displayName
             end
 
-			local isAlt = RedGuild_AltParent[name] and RedGuild_AltParent[name] ~= name
+            -- NOT IN GUILD MARKER
+            if not IsNameInGuild(name) then
+                displayName = "-" .. displayName
+            end
 
-			local displayName = name
-
-			if RuntimeInvalid(name) then
-				displayName = "|cffff0000-|r " .. displayName
-			end
-
-			if isAlt then
-				displayName = "~" .. displayName
-			end
-
-			
-			row.cols[1].fs:SetText(classColor .. displayName .. "|r")
+            row.cols[1].fs:SetText(classColor .. displayName .. "|r")
             row.cols[2].icon:SetTexture(SPEC_ICONS[d.msRole] or "Interface\\Icons\\INV_Misc_QuestionMark")
             row.cols[3].icon:SetTexture(SPEC_ICONS[d.osRole] or "Interface\\Icons\\INV_Misc_QuestionMark")
 
@@ -2055,19 +2042,24 @@ function UpdateTable()
     ----------------------------------------------------------------
     -- SCROLL HEIGHT
     ----------------------------------------------------------------
-    dkpScrollChild:SetHeight(totalRows * rowHeight)
-
-    ----------------------------------------------------------------
-    -- FINAL SCROLL CLAMP
-    ----------------------------------------------------------------
-    local maxScroll = dkpScroll:GetVerticalScrollRange()
-    if dkpScroll:GetVerticalScroll() > maxScroll then
-        dkpScroll:SetVerticalScroll(maxScroll)
-    end
+    dkpScrollChild:SetHeight(totalRows * rowHeight + rowHeight)
 end
 
 local function UpdateAuditLog()
     if not auditRows or not RedGuild_Audit then return end
+	
+	-- Remove entries older than 30 days
+	local cutoff = time() - (30 * 24 * 60 * 60)  -- 30 days in seconds
+
+	for i = #RedGuild_Audit, 1, -1 do
+		local entry = RedGuild_Audit[i]
+		if entry and entry.time then
+			local ts = ParseAuditTime(entry.time)
+			if ts and ts < cutoff then
+				table.remove(RedGuild_Audit, i)
+			end
+		end
+	end
 
     table.sort(RedGuild_Audit, function(a, b)
         if not a.time or not b.time then
@@ -3482,7 +3474,6 @@ end
             for i, name in ipairs(missing) do
                 local online = IsPlayerOnline(name)
 				local offlineText = online and "" or " |cffaaaaaa(off)|r"
-				local online = IsPlayerOnline(name)
 
 				local colour = online and "|cffff3333" or "|cffaaaaaa"   -- red if online, grey if offline
 				local display = colour .. name .. "|r"
@@ -3779,11 +3770,9 @@ do
     headerFrame:SetSize(600, 20)
 
 local headers = {
-    { text = "Name",      width = 120 },
-    { text = "Main (MS)", width = 80  },
-    { text = "Alt (MS)",  width = 80  },
-    { text = "Main (OS)", width = 80  },
-    { text = "Alt (OS)",  width = 80  },
+    { text = "Name",      width = 140 },
+    { text = "Main (MS)", width = 150  },
+    { text = "Main (OS)", width = 150  },
     { text = "Notes",     width = 200 },
 }
 
@@ -3829,10 +3818,8 @@ local headers = {
 
 local COL_NAME     = 1
 local COL_MAIN_MS  = 2
-local COL_ALT_MS   = 3
-local COL_MAIN_OS  = 4
-local COL_ALT_OS   = 5
-local COL_NOTES    = 6
+local COL_MAIN_OS  = 3
+local COL_NOTES    = 4
 
 local ROW_HEIGHT = 18
 mlRows = {}
@@ -3881,11 +3868,9 @@ function CreateMLRow(i)
     row.cols = {}
 
 local widths = {
-    [COL_NAME]     = 120,
-    [COL_MAIN_MS]  = 80,
-    [COL_ALT_MS]   = 80,
-    [COL_MAIN_OS]  = 80,
-    [COL_ALT_OS]   = 80,
+    [COL_NAME]     = 140,
+    [COL_MAIN_MS]  = 150,
+    [COL_MAIN_OS]  = 150,
     [COL_NOTES]    = 200,
 }
 
@@ -3898,7 +3883,7 @@ local widths = {
             fs:SetJustifyH("LEFT")
             row.cols[col] = fs
 
-        elseif col == COL_MAIN_MS or col == COL_ALT_MS or col == COL_MAIN_OS or col == COL_ALT_OS then
+        elseif col == COL_MAIN_MS or col == COL_MAIN_OS then
             local btn = CreateFrame("Button", nil, row)
             btn:SetPoint("LEFT", row, "LEFT", x, 0)
             btn:SetSize(widths[col], ROW_HEIGHT)
@@ -3973,38 +3958,45 @@ function RefreshMLTools()
     ----------------------------------------------------------------
     -- BUILD SORTED LIST OF ML NAMES
     ----------------------------------------------------------------
-    local names = {}
-    for name in pairs(RedGuild_ML or {}) do
+local CLASS_COLORS = {}
+for class, c in pairs(RAID_CLASS_COLORS) do
+    CLASS_COLORS[class] = string.format("|cff%02x%02x%02x", c.r * 255, c.g * 255, c.b * 255)
+end
+
+local names = {}
+for name in pairs(RedGuild_ML or {}) do
+    if type(name) == "string" then
         table.insert(names, name)
     end
-    table.sort(names, function(a, b)
-    local function weight(name)
+end
+
+table.sort(names)
+
+local filtered = {}
+for _, name in ipairs(names) do
+    if IsNameInGuild(name) then
+
+        -- class colour
+        local class = RedGuild_Data[name] and RedGuild_Data[name].class
+        local colour = CLASS_COLORS[class] or "|cffaaaaaa"
+
+                -- main/alt tag (white)
+        local tag = ""
         if IsMain(name) then
-            return 0   -- mains first
+            tag = " |cffffffff(main)|r"
         elseif IsAlt(name) then
-            return 2   -- alts last
-        else
-            return 1   -- unknowns in the middle
+            tag = " |cffffffff(alt)|r"
+		else
+			tag = " |cffffffff(unknown)|r"
         end
+
+        -- final display string (FLAT STRING)
+        local display = colour .. name .. "|r" .. tag
+
+        table.insert(filtered, display)
     end
+end
 
-    local wa = weight(a)
-    local wb = weight(b)
-
-    if wa ~= wb then
-        return wa < wb
-    end
-
-    return a < b
-end)
-	
-	-- Remove characters no longer in guild
-	local filtered = {}
-	for _, name in ipairs(names) do
-		if IsNameInGuild(name) then
-			table.insert(filtered, name)
-		end
-	end
 	names = filtered
 
 ----------------------------------------------------------------
@@ -4051,6 +4043,41 @@ if mlShowGroupOnly then
         end
     end
 
+    ----------------------------------------------------------------
+    -- 2. ADD missing group/raid members not already in the DKP list
+    ----------------------------------------------------------------
+    local function addIfMissing(unit)
+        local uName = UnitName(unit)
+        if uName then
+            uName = Ambiguate(uName, "short")
+            local found = false
+
+            for _, existing in ipairs(filtered) do
+                if existing == uName then
+                    found = true
+                    break
+                end
+            end
+
+            if not found then
+                table.insert(filtered, uName)
+            end
+        end
+    end
+
+    if IsInRaid() then
+        for i = 1, GetNumGroupMembers() do
+            addIfMissing("raid"..i)
+        end
+    elseif IsInGroup() then
+        for i = 1, GetNumSubgroupMembers() do
+            addIfMissing("party"..i)
+        end
+        addIfMissing("player")
+    else
+        addIfMissing("player")
+    end
+
     names = filtered
 end
 
@@ -4089,9 +4116,7 @@ for i = 1, visibleCount do
     ------------------------------------------------------------
 local nameFS = row.cols[COL_NAME]
 local mainMSBtn = row.cols[COL_MAIN_MS]
-local altMSBtn  = row.cols[COL_ALT_MS]
 local mainOSBtn = row.cols[COL_MAIN_OS]
-local altOSBtn  = row.cols[COL_ALT_OS]
 local notesBtn  = row.cols[COL_NOTES]
 
     ------------------------------------------------------------
@@ -4115,35 +4140,8 @@ local notesBtn  = row.cols[COL_NOTES]
     -- VALUES
     ------------------------------------------------------------
 mainMSBtn:SetText(tostring(mlData.mlMainMS or 0))
-altMSBtn:SetText(tostring(mlData.mlAltMS or 0))
 mainOSBtn:SetText(tostring(mlData.mlMainOS or 0))
-altOSBtn:SetText(tostring(mlData.mlAltOS or 0))
     notesBtn:SetText(mlData.mlNotes or "")
-
-------------------------------------------------------------
--- ALT TRACKER INTEGRATION: HIDE/SHOW COLUMNS
-------------------------------------------------------------
-if IsMain(name) then
-    -- Mains: hide alt columns
-    altMSBtn:Hide()
-    altOSBtn:Hide()
-    mainMSBtn:Show()
-    mainOSBtn:Show()
-
-elseif IsAlt(name) then
-    -- Alts: hide main columns
-    mainMSBtn:Hide()
-    mainOSBtn:Hide()
-    altMSBtn:Show()
-    altOSBtn:Show()
-
-else
-    -- Unknown to alt tracker: show everything
-    mainMSBtn:Show()
-    mainOSBtn:Show()
-    altMSBtn:Show()
-    altOSBtn:Show()
-end
 
     ------------------------------------------------------------
     -- CLICK HANDLERS (unchanged logic, just safer name usage)
@@ -4167,14 +4165,10 @@ local function makeMLHandler(field)
 end
 
 mainMSBtn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-altMSBtn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
 mainOSBtn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-altOSBtn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
 
 mainMSBtn:SetScript("OnClick", makeMLHandler("mlMainMS"))
-altMSBtn:SetScript("OnClick",  makeMLHandler("mlAltMS"))
 mainOSBtn:SetScript("OnClick", makeMLHandler("mlMainOS"))
-altOSBtn:SetScript("OnClick",  makeMLHandler("mlAltOS"))
 
     ------------------------------------------------------------
     -- NOTES EDIT
@@ -4270,26 +4264,17 @@ resetBtn:SetScript("OnClick", function()
             local ml = EnsureML(name)
 
             local oldMainMS  = tonumber(ml.mlMainMS or 0) or 0
-            local oldAltMS   = tonumber(ml.mlAltMS or 0) or 0
 			local oldMainOS   = tonumber(ml.mlMainOS or 0) or 0
-			local oldAltOS   = tonumber(ml.mlAltOS or 0) or 0
             local oldNotes = ml.mlNotes or ""
 
             if oldMainMS ~= 0 then
                 ml.mlMainMS = 0
-            end
-
-            if oldAltMS ~= 0 then
-                ml.mlAltMS = 0
             end
 			
             if oldMainOS ~= 0 then
                 ml.mlMainOS = 0
             end
 
-            if oldAltOS ~= 0 then
-                ml.mlAltOS = 0
-            end
             if oldNotes ~= "" then
                 ml.mlNotes = ""
                 LogAudit(name, "mlNotes", oldNotes, "")
@@ -5146,34 +5131,13 @@ do
 ----------------------------------------------------------------
 -- DKP FILTER CHECKBOXES (top-left above table)
 ----------------------------------------------------------------
-if IsEditor(UnitName("player")) then
-
--- SHOW HIDDEN RECORDS
-local showHiddenChk = CreateFrame("CheckButton", nil, dkpPanel, "ChatConfigCheckButtonTemplate")
-showHiddenChk:SetPoint("TOPLEFT", dkpPanel, "TOPLEFT", 80, -30)
-showHiddenChk:SetSize(18, 18)
-
-local showHiddenLabel = dkpPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-showHiddenLabel:SetPoint("LEFT", showHiddenChk, "RIGHT", 4, 0)
-showHiddenLabel:SetText("Show hidden records")
-
--- Only editors see it
-if not IsEditor(UnitName("player")) then
-    showHiddenChk:Hide()
-    showHiddenLabel:Hide()
-end
-
-showHiddenChk:SetScript("OnClick", function(self)
-    showHiddenRecords = self:GetChecked() or false
-    UpdateTable()
-end)
-
+--if IsEditor(UnitName("player")) then
 
 ----------------------------------------------------------------
--- SHOW GROUP/RAID ONLY
+-- SHOW GROUP/RAID ONLY (still to the right of Show Only Me)
 ----------------------------------------------------------------
 local showGroupChk = CreateFrame("CheckButton", nil, dkpPanel, "ChatConfigCheckButtonTemplate")
-showGroupChk:SetPoint("LEFT", showHiddenLabel, "RIGHT", 40, 0)
+showGroupChk:SetPoint("TOPLEFT", dkpPanel, "TOPLEFT", 200, -30)
 showGroupChk:SetSize(18, 18)
 
 local showGroupLabel = dkpPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
@@ -5181,10 +5145,10 @@ showGroupLabel:SetPoint("LEFT", showGroupChk, "RIGHT", 4, 0)
 showGroupLabel:SetText("Show group/raid players only")
 
 -- Only editors see it
-if not IsEditor(UnitName("player")) then
-    showGroupChk:Hide()
-    showGroupLabel:Hide()
-end
+--if not IsEditor(UnitName("player")) then
+--    showGroupChk:Hide()
+--    showGroupLabel:Hide()
+--end
 
 showGroupChk:SetScript("OnClick", function(self)
     C_Timer.After(0, function()
@@ -5193,35 +5157,61 @@ showGroupChk:SetScript("OnClick", function(self)
     end)
 end)
 
-end
+--end
 
-	----------------------------------
-	-- DKP TABLE SCROLL
-	----------------------------------
+----------------------------------------------------------------
+-- SHOW ONLY ME (all users)
+----------------------------------------------------------------
+local showMeChk = CreateFrame("CheckButton", nil, dkpPanel, "ChatConfigCheckButtonTemplate")
 
-    dkpScroll = CreateFrame("ScrollFrame", nil, dkpPanel, "UIPanelScrollFrameTemplate")
-    dkpScroll:SetPoint("TOPLEFT", dkpPanel, "TOPLEFT", 30, headerY - 20)
-    dkpScroll:SetPoint("BOTTOMRIGHT", dkpPanel, "BOTTOMRIGHT", -30, 60)
+showMeChk:SetPoint("TOPLEFT", dkpPanel, "TOPLEFT", 80, -30)
+showMeChk:SetSize(18, 18)
 
-    local sb = dkpScroll.ScrollBar
-    if sb then
-        sb:ClearAllPoints()
-        sb:SetPoint("TOPRIGHT", dkpScroll, "TOPRIGHT", -5, -18)
-        sb:SetPoint("BOTTOMRIGHT", dkpScroll, "BOTTOMRIGHT", -20, 16)
-    end
+local showMeLabel = dkpPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+showMeLabel:SetPoint("LEFT", showMeChk, "RIGHT", 4, 0)
+showMeLabel:SetText("Show only me")
 
-    dkpScrollChild = CreateFrame("Frame", nil, dkpScroll)
-    
-    dkpScrollChild:SetPoint("TOPLEFT", 0, 0)
-    dkpScrollChild:SetWidth(1)
-    
-    dkpScroll:SetScrollChild(dkpScrollChild)
-    dkpScroll:SetScript("OnVerticalScroll", function(self, offset)
-        self:SetVerticalScroll(offset)
+showMeChk:SetScript("OnClick", function(self)
+    dkpShowOnlyMe = self:GetChecked() or false
+    UpdateTable()
+end)
+
+----------------------------------
+-- DKP TABLE SCROLL
+----------------------------------
+
+dkpScroll = CreateFrame("ScrollFrame", nil, dkpPanel, "UIPanelScrollFrameTemplate")
+dkpScroll:SetPoint("TOPLEFT", dkpPanel, "TOPLEFT", 30, headerY - 20)
+dkpScroll:SetPoint("BOTTOMRIGHT", dkpPanel, "BOTTOMRIGHT", -30, 60)
+
+dkpScrollChild = CreateFrame("Frame", nil)
+dkpScrollChild:SetWidth(dkpScroll:GetWidth())
+dkpScroll:SetScrollChild(dkpScrollChild)
+dkpScrollChild:SetParent(dkpScroll)
+dkpScrollChild:ClearAllPoints()
+dkpScrollChild:SetPoint("TOPLEFT", 0, 0)
+
+local sb = dkpScroll.ScrollBar
+if sb then
+    sb:ClearAllPoints()
+    sb:SetPoint("TOPRIGHT", dkpScroll, "TOPRIGHT", -5, -18)
+    sb:SetPoint("BOTTOMRIGHT", dkpScroll, "BOTTOMRIGHT", -20, 16)
+
+    sb:SetValueStep(ROW_HEIGHT)
+
+    sb:SetScript("OnValueChanged", function(self, value)
+        dkpScroll:SetVerticalScroll(value)
         UpdateTable()
     end)
+end
 
+dkpScroll:SetScript("OnVerticalScroll", function(self, offset)
+
+    self:SetVerticalScroll(offset)
     UpdateTable()
+end)
+
+UpdateTable()
 end
 
 
@@ -6261,33 +6251,6 @@ StaticPopupDialogs["REDGUILD_BROADCAST_DKP"] = {
     hideOnEscape = true,
 }
 
-StaticPopupDialogs["REDGUILD_INACTIVE_OR_DELETE"] = {
-    text = "Do you wish to set this DKP record to inactive or delete it?",
-    button1 = "Inactive",
-    button2 = "Delete",
-    button3 = "Cancel",
-    OnAccept = function(self, player)
-        -- INACTIVE OPTION
-        if not player then return end
-        local d = RedGuild_Data[player]
-        if not d then return end
-
-        d.inactive = true
-        BumpDKPVersion()
-        UpdateTable()
-        Print("Set DKP record for " .. player .. " to inactive.")
-    end,
-    OnCancel = function(self, player)
-        -- DELETE OPTION
-        if not player then return end
-        StaticPopup_Show("REDGUILD_DELETE_PLAYER", player, nil, player)
-    end,
-    timeout = 0,
-    whileDead = true,
-    hideOnEscape = true,
-    preferredIndex = 3
-}
-
 StaticPopupDialogs["REDGUILD_DELETE_PLAYER"] = {
     text = "Are you sure you want to delete DKP data for %s?",
     button1 = "Delete",
@@ -6687,7 +6650,7 @@ if event == "CHAT_MSG_ADDON" then
 				if bestVer > requesterVer then
 					local snapshot = BuildAltSnapshot()
 					local encoded  = EncodePayload(snapshot)
-					RedGuild_Send("ALTS", encoded, requester)
+					RedGuild_Send("ALTS_DATA", encoded, requester)
 				end
 			end
 			return

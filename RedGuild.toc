@@ -1,4 +1,4 @@
-## Interface: 20505
+## Interface: 20506
 ## Title: RedGuild
 ## Author: Lunátic
 ## Version: 1.15.69
