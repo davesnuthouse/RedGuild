@@ -11,7 +11,7 @@ Required urgently:
 Features to deliver ASAP:
 * Redo the way DKP table saves to a single button commit (hook into editor rollback funcitonality)
 * Revisit audit log completely (might be better after the dkp save change)
-* Use alt data for editors to remove their alts from sync (better data integrity)
+* Use alt data for editors to remove their alts from sync (better data integrity) - currently their alts are exposed to auto sync from other editors.
 * Add a small sync to check table version between non editors and colour the sync info if out of date
 * Add RW countdown timer to ML tab
 * show only online on the alt tracker
