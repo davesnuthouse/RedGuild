@@ -16,7 +16,6 @@ Features to deliver ASAP:
 * Revisit audit log completely (might be better after the dkp save change)
 * Use alt data for editors to remove their alts from sync (better data integrity) - currently their alts are exposed to auto sync from other editors.
 * Add a small sync to check table version between non editors and colour the sync info if out of date
-* Add RW countdown timer to ML tab
 * show only online on the alt tracker
 * Refinement needed to Sync status for editors to find the highest version recorded for dkp table
 * End of raid reminder to sync
