@@ -27,7 +27,7 @@ Outstanding bugs:
 
 
 Ideas for future releases (significant work):
-* Colour coding in the logs to make them easier to read
+* Colour coding in the logs to make them easier to read (and full redesign of log tab tbh)
 * Full support for DKP bidding
 * Raid group planner
 * Tactics
