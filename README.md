@@ -6,6 +6,7 @@ NOTE - YOU SHOULD ONLY USE THE RELEASE VERSION ON CURSEFORGE.  THE LUA LISTED HE
 
 Required urgently:
 * Prevent out of date editors from syncing at all
+* Reconfirm sync tooltip accuracy
 * Warnings on functions that change dkp table version to advise editor they aren't the highest version
 * Prevent addon opening in combat
 * Out of guild users?
