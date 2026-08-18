@@ -19,6 +19,7 @@ Features to deliver ASAP:
 * Add RW countdown timer to ML tab
 * show only online on the alt tracker
 * Refinement needed to Sync status for editors to find the highest version recorded for dkp table
+* End of raid reminder to sync
 
 Major bugs:
 
