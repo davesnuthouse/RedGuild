@@ -24,6 +24,7 @@ Major bugs:
 
 
 Outstanding bugs:
+* Old Bal doesn't pull the capped 300
 
 
 Ideas for future releases (significant work):
