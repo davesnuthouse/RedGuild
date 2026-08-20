@@ -8,7 +8,6 @@ Required urgently:
 * Prevent out of date editors from syncing at all
 * Reconfirm sync tooltip accuracy
 * Warnings on functions that change dkp table version to advise editor they aren't the highest version
-* Prevent addon opening in combat
 * Out of guild users?
 
 Features to deliver ASAP:
@@ -22,10 +21,7 @@ Features to deliver ASAP:
 
 Major bugs:
 
-
 Outstanding bugs:
-* Old Bal doesn't pull the capped 300
-
 
 Ideas for future releases (significant work):
 * Colour coding in the logs to make them easier to read (and full redesign of log tab tbh)
@@ -37,6 +33,17 @@ Ideas for future releases (significant work):
 
 
 -------------------------------------------------------
+
+1.17.69 Changelog
+-------------------------------------------------------
+Added features:
+* Row highlighting for user
+* 
+  
+Bugs squashed:
+*  Users over 300 now display properly on LastWeek
+*  Addon no longer opens during combat to prevent crash
+
 
 1.16.69 Changelog
 -------------------------------------------------------
