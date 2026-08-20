@@ -38,7 +38,6 @@ Ideas for future releases (significant work):
 -------------------------------------------------------
 Added features:
 * Row highlighting for user
-* 
   
 Bugs squashed:
 *  Users over 300 now display properly on LastWeek
