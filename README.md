@@ -42,6 +42,7 @@ Added features:
 Bugs squashed:
 *  Users over 300 now display properly on LastWeek
 *  Addon no longer opens during combat to prevent crash
+*  Hopefully fixed unticking show group/raid players on ML tab wiping the list
 
 
 1.16.69 Changelog
