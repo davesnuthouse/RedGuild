@@ -12,7 +12,7 @@ RedGuild_Audit  	= RedGuild_Audit  or {}
 RedGuild_Usage  	= RedGuild_Usage  or {}
 
 local addonName      = ...
-local REDGUILD_VERSION = "1.16.69"
+local REDGUILD_VERSION = "1.17.69"
 
 local REDGUILD_CHAT_PREFIX = "REDGUILD"
 
@@ -1955,9 +1955,27 @@ function UpdateTable()
 			d.spent      = d.spent      or 0
 			d.rotated    = d.rotated    or 0
 			d.balance    = d.balance    or 0
+			
+			----------------------------------------------------------------
+			-- CAP LAST WEEK AT 300
+----------------------------------------------------------------
+			if d.lastWeek > 300 then
+				d.lastWeek = 300
+			end
 
             row.name = name
             row.index = dataIndex
+			
+			----------------------------------------------------------------
+			-- HIGHLIGHT LOGGED-IN PLAYER ROW
+----------------------------------------------------------------
+			local me = Ambiguate(UnitName("player"), "short")
+
+			if name == me then
+				row.bg:SetColorTexture(0.20, 0.40, 0.80, 0.25)
+			else
+				row.bg:SetColorTexture(0, 0, 0, 0.15)
+			end
 
             row:Show()
 			row:SetPoint("TOPLEFT", dkpScrollChild, "TOPLEFT", 0, -(dataIndex - 1) * rowHeight) 
@@ -6171,23 +6189,45 @@ StaticPopupDialogs["REDGUILD_NEW_WEEK"] = {
     text = "Start a new DKP session? This will move all current values into Old Bal.",
     button1 = "Yes",
     button2 = "No",
-    OnAccept = function()
-        for name, d in pairs(RedGuild_Data) do
-            local oldBalance = d.balance + d.attendance or 0
+	OnAccept = function()
+		for name, d in pairs(RedGuild_Data) do
+			local balance    = tonumber(d.balance)    or 0
+			local attendance = tonumber(d.attendance) or 0
 
-            d.lastWeek   = oldBalance
-            d.onTime     = 0
-            d.attendance = 0
-            d.bench      = 0
-            d.spent      = 0
-            d.balance    = 0
+			-- Original functionality: add attendance into lastWeek
+			local rawTransfer = balance + attendance
 
-            LogAudit(name, "DKP Session Change", "their previous balance of "..oldBalance, "prepare for new DKP session")
-        end
+			-- New rule: cap lastWeek at 300
+			local transfer = math.min(rawTransfer, 300)
+
+			-- Apply the transfer
+			d.lastWeek = transfer
+
+			-- Reduce balance ONLY by the amount actually moved
+			-- (attendance is not subtracted from balance)
+			d.balance = balance - transfer
+			if d.balance < 0 then
+				d.balance = 0
+			end
+
+			-- Reset weekly fields
+			d.onTime     = 0
+			d.attendance = 0
+			d.bench      = 0
+			d.spent      = 0
+
+			LogAudit(
+				name,
+				"DKP Session Change",
+				"moved "..transfer.." (from balance + attendance)",
+				"new session start"
+			)
+		end
+
 		BumpDKPVersion()
-        UpdateTable()
-        Print("A new DKP session has begun.")
-    end,
+		UpdateTable()
+		Print("A new DKP session has begun.")
+	end,
     timeout = 0,
     whileDead = true,
     hideOnEscape = true,
@@ -6278,15 +6318,26 @@ local LDB = LibStub("LibDataBroker-1.1"):NewDataObject("RedGuild", {
     icon = "Interface\\AddOns\\RedGuild\\media\\RedGuild_Minimap64.png",
 
     OnClick = function(_, button)
-		if not RedGuild_UIReady then
-			return
-		end
-		
+        if not RedGuild_UIReady then
+            return
+        end
+
         if not RedGuild_Enabled then
             print("|cffff5555RedGuild is disabled for your character as you are not in Redemption guild.|r")
             return
         end
 
+        ----------------------------------------------------------------
+        -- COMBAT LOCKDOWN: Block opening the addon while in combat
+        ----------------------------------------------------------------
+        if InCombatLockdown() then
+            print("|cffff5555RedGuild: Cannot open the DKP window while in combat.|r")
+            return
+        end
+
+        ----------------------------------------------------------------
+        -- NORMAL CLICK HANDLING
+        ----------------------------------------------------------------
         if button == "LeftButton" then
             if mainFrame:IsShown() then
                 mainFrame:Hide()
@@ -6304,7 +6355,7 @@ local LDB = LibStub("LibDataBroker-1.1"):NewDataObject("RedGuild", {
     OnTooltipShow = function(tt)
         tt:AddLine("RedGuild")
         tt:AddLine("|cff00ff00Left-click|r to open DKP")
-		tt:AddLine("|cff00ff00Right-click|r to open ML")
+        tt:AddLine("|cff00ff00Right-click|r to open ML")
     end,
 })
 
@@ -6848,6 +6899,49 @@ SLASH_REDGUILD1 = "/redguild"
 SlashCmdList["REDGUILD"] = function(msg)
     msg = (msg or ""):lower():trim()
 
+    ----------------------------------------------------------------
+    -- COMBAT LOCKDOWN: Block opening the addon while in combat
+    ----------------------------------------------------------------
+    if InCombatLockdown() then
+        -- Allowed in combat: hide, debug, minimap, help
+        if msg == "hide" then
+            mainFrame:Hide()
+            return
+        end
+
+        if msg == "debug" then
+            RedGuild_Debug = not RedGuild_Debug
+            if RedGuild_Debug then
+                print("|cff00ff00[RedGuild] Debug mode ENABLED|r")
+            else
+                print("|cffff0000[RedGuild] Debug mode DISABLED|r")
+            end
+            return
+        end
+
+        if msg == "minimap" then
+            RedGuild_ResetMinimapButton()
+            return
+        end
+
+        if msg == "help" or msg == "" then
+            print("|cffffd100RedGuild Commands:|r")
+            print("|cff00ff00/redguild show|r   - Open the DKP window")
+            print("|cff00ff00/redguild hide|r   - Hide the DKP window")
+            print("|cff00ff00/redguild toggle|r - Toggle the DKP window")
+            print("|cff00ff00/redguild minimap|r - Reset minimap icon position")
+            print("|cff00ff00/redguild help|r   - Show this help list")
+            return
+        end
+
+        -- Anything else that tries to open UI is blocked
+        print("|cffff5555RedGuild: Cannot open the DKP window while in combat.|r")
+        return
+    end
+
+    ----------------------------------------------------------------
+    -- NORMAL (OUT OF COMBAT) COMMANDS
+    ----------------------------------------------------------------
     if msg == "show" then
         mainFrame:Show()
         ShowTab(TAB_DKP)
@@ -6882,13 +6976,13 @@ SlashCmdList["REDGUILD"] = function(msg)
             print("|cffff0000[RedGuild] Debug mode DISABLED|r")
         end
         return
-	end
-	
+    end
+
     if msg == "help" or msg == "" then
         print("|cffffd100RedGuild Commands:|r")
         print("|cff00ff00/redguild show|r   - Open the DKP window")
         print("|cff00ff00/redguild hide|r   - Hide the DKP window")
-		print("|cff00ff00/redguild toggle|r - Toggle the DKP window")
+        print("|cff00ff00/redguild toggle|r - Toggle the DKP window")
         print("|cff00ff00/redguild minimap|r - Reset minimap icon position")
         print("|cff00ff00/redguild help|r   - Show this help list")
         return
