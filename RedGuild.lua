@@ -1361,10 +1361,15 @@ local dkpScrollChild
 
 local ROW_HEIGHT = 18
 
+ROW_TOTAL_WIDTH = 30 -- delete button column
+for _, h in ipairs(headers) do
+    ROW_TOTAL_WIDTH = ROW_TOTAL_WIDTH + h.width + 5
+end
+
 function CreateDKPRow()
     local row = CreateFrame("Frame", nil, dkpScrollChild)
     row:SetFrameLevel(1)
-    row:SetSize(1, ROW_HEIGHT)
+    row:SetSize(ROW_TOTAL_WIDTH, ROW_HEIGHT)
 
     local bg = row:CreateTexture(nil, "BACKGROUND")
     bg:SetAllPoints()
@@ -4079,6 +4084,7 @@ if mlShowGroupOnly then
 
             if not found then
                 table.insert(filtered, uName)
+				EnsureML(uName)
             end
         end
     end
@@ -4435,14 +4441,14 @@ mlPanel:SetScript("OnHide", function()
 end)
 end
 
-    --------------------------------------------------------------------
-    -- RL TOOLS PANEL
-    --------------------------------------------------------------------
-	RLRows = RLRows or {}
-	RLSelected = RLSelected or {}
-    do
-	local RLSelectGroupMembers
-	------------------------------------------------------------
+--------------------------------------------------------------------
+-- RL TOOLS PANEL
+--------------------------------------------------------------------
+RLRows = RLRows or {}
+RLSelected = RLSelected or {}
+   do
+local RLSelectGroupMembers
+------------------------------------------------------------
 -- RL: SELECT GROUP/RAID MEMBERS CHECKBOX
 ------------------------------------------------------------
 local rlAutoSelectChk = CreateFrame("CheckButton", nil, raidPanel, "ChatConfigCheckButtonTemplate")
