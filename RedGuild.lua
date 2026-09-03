@@ -12,7 +12,7 @@ RedGuild_Audit  	= RedGuild_Audit  or {}
 RedGuild_Usage  	= RedGuild_Usage  or {}
 
 local addonName      = ...
-local REDGUILD_VERSION = "1.18.00"
+local REDGUILD_VERSION = "2.0.69"
 
 local REDGUILD_CHAT_PREFIX = "REDGUILD"
 
@@ -2305,7 +2305,7 @@ local function CreateUI()
 
     mainFrame.title = mainFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     mainFrame.title:SetPoint("CENTER", mainFrame.TitleBg, "CENTER", 0, 0)
-    mainFrame.title:SetText("Redemption Guild UI - brought to you by a clueless idiot called Lunátic")
+    mainFrame.title:SetText("Redemption Guild UI - brought to you by two clueless idiots called Lunátic and Celery Guy")
 
 --------------------------------------------------------------------
 -- SYNC INDICATOR (TITLE BAR)
@@ -6784,7 +6784,8 @@ if event == "CHAT_MSG_ADDON" then
     local _, simpleType, simplePayload = msg:match("^([^:]+):([^:]+):?(.*)$")
     if not simpleType then return end
 
-    -- BIDDING: BID_START / BID_PLACE / BID_STOP / BID_CANCEL / BID_AWARD
+    -- BIDDING: BID_START / BID_PLACE / BID_PAUSE / BID_RESUME / BID_STOP /
+    -- BID_REOPEN / BID_CANCEL / BID_AWARD
     if simpleType:sub(1, 4) == "BID_" then
         RedGuild_Auction_OnAddonMessage(simpleType, simplePayload, sender)
         return
@@ -7358,9 +7359,13 @@ function RedGuild_Auction_SortedBids()
 end
 
 -- Editor side. Records or replaces a bid. src is "addon" or "whisper".
+-- Once bidding has closed but the item has not yet been awarded, a
+-- bid is still accepted rather than rejected outright - it is just
+-- flagged as late so the editor can see it missed the window and can
+-- decide whether it still counts.
+-- Returns true, isLate on success; false, errorMessage on failure.
 function RedGuild_Auction_RecordBid(player, amount, mode, src, roll)
     if not RedGuild_Auction.posted then return false, "No item is posted." end
-    if not RedGuild_Auction.open   then return false, "Bidding is closed." end
     if not player then return false, "No player." end
 
     player = Ambiguate(player, "short")
@@ -7393,6 +7398,8 @@ function RedGuild_Auction_RecordBid(player, amount, mode, src, roll)
         keptRoll = existing.roll
     end
 
+    local isLate = not RedGuild_Auction.open
+
     RedGuild_Auction.bids[who] = {
         name   = player,
         key    = who,
@@ -7401,11 +7408,12 @@ function RedGuild_Auction_RecordBid(player, amount, mode, src, roll)
         src    = src or "addon",
         roll   = roll or keptRoll or nil,
         bal    = bal,
+        late   = isLate or nil,
         at     = existing and existing.at or GetTime(),
     }
 
     RedGuild_Auction_RefreshMaster()
-    return true
+    return true, isLate
 end
 
 --------------------------------------------------
@@ -7459,6 +7467,35 @@ StaticPopupDialogs["REDGUILD_BID_SWAP_ITEM"] = {
     timeout = 0, whileDead = true, hideOnEscape = true, preferredIndex = 3,
 }
 
+-- Shared ticker used by both a fresh Start and a Reopen: announces
+-- the standard countdown warnings and auto-closes at zero.
+local function AuctionStartTicker()
+    if RedGuild_Auction.ticker then RedGuild_Auction.ticker:Cancel() end
+    RedGuild_Auction.ticker = C_Timer.NewTicker(1, function()
+        if not RedGuild_Auction.open then return end
+
+        -- A paused auction keeps its clock frozen and announces
+        -- nothing, but the window still redraws so the editor can
+        -- see the held time.
+        if RedGuild_Auction.paused then
+            RedGuild_Auction_RefreshMaster()
+            return
+        end
+
+        local left = math.ceil((RedGuild_Auction.endTime or 0) - GetTime())
+
+        if left == 30 or left == 20 or left == 10 or left == 5 then
+            AuctionWarn(string.format("%d seconds left to bid on %s",
+                left, RedGuild_Auction.itemLink or "the item"))
+        end
+
+        if left <= 0 then
+            RedGuild_Auction_Stop(true)
+        end
+        RedGuild_Auction_RefreshMaster()
+    end)
+end
+
 function RedGuild_Auction_Start()
     if not IsAuthorized() then
         AuctionPrint("Only editors can post items for bidding.")
@@ -7506,9 +7543,6 @@ function RedGuild_Auction_Start()
 
     AuctionWarn(string.format(
         "Bidding OPEN on %s - %d seconds.", RedGuild_Auction.itemLink, dur))
-    AuctionWarn(string.format(
-        "MAIN SPEC: bid DKP, minimum %d.   OFF SPEC: /roll 69 only, costs no DKP.",
-        AUCTION_MIN_BID))
     AuctionAnnounce(string.format(
         "No addon? Whisper %s:  !bid <amount>  for main spec,  or just /roll 69 for off spec.  !pass to skip.",
         RedGuild_Auction.ml))
@@ -7520,30 +7554,7 @@ function RedGuild_Auction_Start()
     -- else, including the minimum and their own balance.
     RedGuild_Auction_ShowPrompt()
 
-    if RedGuild_Auction.ticker then RedGuild_Auction.ticker:Cancel() end
-    RedGuild_Auction.ticker = C_Timer.NewTicker(1, function()
-        if not RedGuild_Auction.open then return end
-
-        -- A paused auction keeps its clock frozen and announces
-        -- nothing, but the window still redraws so the editor can
-        -- see the held time.
-        if RedGuild_Auction.paused then
-            RedGuild_Auction_RefreshMaster()
-            return
-        end
-
-        local left = math.ceil((RedGuild_Auction.endTime or 0) - GetTime())
-
-        if left == 30 or left == 20 or left == 10 or left == 5 then
-            AuctionWarn(string.format("%d seconds left to bid on %s",
-                left, RedGuild_Auction.itemLink or "the item"))
-        end
-
-        if left <= 0 then
-            RedGuild_Auction_Stop(true)
-        end
-        RedGuild_Auction_RefreshMaster()
-    end)
+    AuctionStartTicker()
 
     RedGuild_Auction_RefreshMaster()
 end
@@ -7620,14 +7631,76 @@ function RedGuild_Auction_Stop(auto)
         end
 
         AuctionWarn(string.format(
-            "Bidding CLOSED on %s. %d bid%s received.",
+            "Bidding CLOSED on %s. %d bid%s received. Late bids are still accepted (and flagged LATE) until it is awarded.",
             RedGuild_Auction.itemLink or "the item",
             count, count == 1 and "" or "s"))
     end
 
     RedGuild_Auction_RefreshMaster()
-    if auctionPrompt then auctionPrompt:Hide() end
+    -- The bidder window is deliberately left open (it now shows
+    -- "Closed") rather than hidden, so a bid placed here after the
+    -- close is still possible - RedGuild_Auction_SendBid records and
+    -- reports it as late instead of rejecting it.
     StaticPopup_Hide("REDGUILD_BID_CONFIRM_PASS")
+end
+
+-- Reopens bidding on the item that is currently posted but closed
+-- (not yet cancelled or awarded), keeping every bid already on the
+-- book. Late-flags on existing bids are cleared, since they are back
+-- inside an open window.
+function RedGuild_Auction_Reopen()
+    if not IsAuthorized() then
+        AuctionPrint("Only editors can reopen bidding.")
+        return
+    end
+    if not RedGuild_Auction_IsAuctioneer() then
+        AuctionPrint("Only the auctioneer running this auction can reopen it.")
+        return
+    end
+    if not RedGuild_Auction.posted then
+        AuctionPrint("No item is posted.")
+        return
+    end
+    if RedGuild_Auction.open then
+        AuctionPrint("Bidding is already open.")
+        return
+    end
+
+    local dur = AUCTION_DEFAULT_DURATION
+    if auctionMaster and auctionMaster.durBox then
+        dur = tonumber(auctionMaster.durBox:GetText()) or AUCTION_DEFAULT_DURATION
+    end
+    if dur < 5   then dur = 5   end
+    if dur > 300 then dur = 300 end
+
+    for _, b in pairs(RedGuild_Auction.bids) do
+        b.late = nil
+    end
+
+    RedGuild_Auction.duration  = dur
+    RedGuild_Auction.endTime   = GetTime() + dur
+    RedGuild_Auction.paused    = false
+    RedGuild_Auction.remaining = nil
+    RedGuild_Auction.open      = true
+
+    RedGuild_Send("BID_REOPEN", EncodePayload({
+        id       = RedGuild_Auction.id,
+        duration = dur,
+    }))
+
+    AuctionWarn(string.format(
+        "Bidding REOPENED on %s - %d seconds. Existing bids are kept.",
+        RedGuild_Auction.itemLink or "the item", dur))
+
+    RedGuild_Auction_PushSync("auction reopen")
+
+    -- The auctioneer never receives their own BID_REOPEN, so refresh
+    -- their own prompt directly, same as on a fresh Start.
+    RedGuild_Auction_ShowPrompt()
+
+    AuctionStartTicker()
+
+    RedGuild_Auction_RefreshMaster()
 end
 
 function RedGuild_Auction_Cancel()
@@ -7750,10 +7823,10 @@ function RedGuild_Auction_SendBid(amount, mode)
         AuctionPrint("There is no item up for bidding.")
         return
     end
-    if not RedGuild_Auction.open then
-        AuctionPrint("Bidding has already closed.")
-        return
-    end
+
+    -- Bidding closed but not yet awarded still accepts bids - they
+    -- are just recorded (and reported back here) as late.
+    local late = not RedGuild_Auction.open
 
     mode   = mode or "MS"
     amount = tonumber(amount) or 0
@@ -7805,11 +7878,21 @@ function RedGuild_Auction_SendBid(amount, mode)
         -- auctioneer can verify it. The system message is picked up
         -- on the editor's client and attached to this bid.
         RandomRoll(1, 69)
-        AuctionPrint("Off spec roll sent. It costs no DKP if you win it.")
+        if late then
+            AuctionPrint("Bidding has closed - your off-spec roll was sent as LATE and may not be considered.")
+        else
+            AuctionPrint("Off spec roll sent. It costs no DKP if you win it.")
+        end
     elseif mode == "PASS" then
         AuctionPrint("You passed.")
     else
-        AuctionPrint(string.format("Bid of %d DKP sent to %s.", amount, RedGuild_Auction.ml))
+        if late then
+            AuctionPrint(string.format(
+                "Bidding has closed - your bid of %d DKP was sent to %s as LATE and may not be considered.",
+                amount, RedGuild_Auction.ml))
+        else
+            AuctionPrint(string.format("Bid of %d DKP sent to %s.", amount, RedGuild_Auction.ml))
+        end
     end
 
     if auctionPrompt then auctionPrompt:Hide() end
@@ -7854,9 +7937,13 @@ function RedGuild_Auction_OnAddonMessage(msgType, payload, sender)
         if not RedGuild_Auction_IsAuctioneer() then return end
         if data.id ~= RedGuild_Auction.id then return end
 
-        local good, err = RedGuild_Auction_RecordBid(sender, data.amount, data.mode, "addon")
-        if not good and err then
-            AuctionWhisper(sender, "RedGuild: " .. err)
+        local good, info = RedGuild_Auction_RecordBid(sender, data.amount, data.mode, "addon")
+        if not good then
+            if info then AuctionWhisper(sender, "RedGuild: " .. info) end
+        elseif info then
+            -- info is the isLate flag on a successful record.
+            AuctionWhisper(sender,
+                "RedGuild: bidding has already closed - your bid was recorded as LATE and may not be considered.")
         end
         return
     end
@@ -7882,8 +7969,31 @@ function RedGuild_Auction_OnAddonMessage(msgType, payload, sender)
     if msgType == "BID_STOP" then
         if data.id ~= RedGuild_Auction.id then return end
         RedGuild_Auction.open = false
-        if auctionPrompt then auctionPrompt:Hide() end
+        -- The window is deliberately left open (it now shows
+        -- "Closed") rather than hidden, so a bid placed here after
+        -- the close is still possible - RedGuild_Auction_SendBid
+        -- records and reports it as late instead of rejecting it.
         StaticPopup_Hide("REDGUILD_BID_CONFIRM_PASS")
+        return
+    end
+
+    ----------------------------------------------------------------
+    if msgType == "BID_REOPEN" then
+        if data.id ~= RedGuild_Auction.id then return end
+
+        RedGuild_Auction.duration  = tonumber(data.duration) or RedGuild_Auction.duration
+        RedGuild_Auction.endTime   = GetTime() + (tonumber(data.duration) or AUCTION_DEFAULT_DURATION)
+        RedGuild_Auction.paused    = false
+        RedGuild_Auction.remaining = nil
+        RedGuild_Auction.open      = true
+
+        -- Late-flags only meant "arrived after the close that just
+        -- ended" - clear them now that the window is open again.
+        for _, b in pairs(RedGuild_Auction.bids) do
+            b.late = nil
+        end
+
+        RedGuild_Auction_ShowPrompt()
         return
     end
 
@@ -7952,10 +8062,13 @@ function RedGuild_Auction_OnWhisper(text, sender)
         return true
     end
 
-    -- Everything below needs to be the auctioneer with bidding open.
+    -- Everything below needs an auctioneer with an item posted. Note
+    -- this is gated on "posted", not "open" - once bidding is closed
+    -- but the item has not been awarded yet, whispered commands are
+    -- still accepted, just recorded (and reported back) as late.
     if not RedGuild_Auction_IsAuctioneer() then return false end
 
-    if not RedGuild_Auction.open then
+    if not RedGuild_Auction.posted then
         if lower:match("^!bid") or lower == "!pass" or lower == "!os" then
             AuctionWhisper(sender, "RedGuild: bidding is not open right now.")
             return true
@@ -7976,9 +8089,14 @@ function RedGuild_Auction_OnWhisper(text, sender)
     -- !os
     ----------------------------------------------------------------
     if lower == "!os" then
-        RedGuild_Auction_RecordBid(sender, 0, "OS", "whisper")
-        AuctionWhisper(sender,
-            "RedGuild: off spec noted, it costs no DKP. Now /roll 69 and I will pick it up.")
+        local ok, isLate = RedGuild_Auction_RecordBid(sender, 0, "OS", "whisper")
+        if ok and isLate then
+            AuctionWhisper(sender,
+                "RedGuild: bidding has already closed - off spec noted as LATE and may not be considered. Now /roll 69 and I will pick it up.")
+        else
+            AuctionWhisper(sender,
+                "RedGuild: off spec noted, it costs no DKP. Now /roll 69 and I will pick it up.")
+        end
         return true
     end
 
@@ -7990,18 +8108,29 @@ function RedGuild_Auction_OnWhisper(text, sender)
         -- Someone trying to bid DKP for off-spec. Register the
         -- off-spec roll instead and explain the rule.
         if tail and (tail:find("os", 1, true) or tail:find("off", 1, true)) then
-            RedGuild_Auction_RecordBid(sender, 0, "OS", "whisper")
-            AuctionWhisper(sender,
-                "RedGuild: off spec is roll only and costs no DKP. Noted as off spec - now /roll 69.")
+            local ok, isLate = RedGuild_Auction_RecordBid(sender, 0, "OS", "whisper")
+            if ok and isLate then
+                AuctionWhisper(sender,
+                    "RedGuild: off spec is roll only and costs no DKP. Bidding has already closed - noted as off spec but LATE and may not be considered. Now /roll 69.")
+            else
+                AuctionWhisper(sender,
+                    "RedGuild: off spec is roll only and costs no DKP. Noted as off spec - now /roll 69.")
+            end
             return true
         end
 
-        local good, err = RedGuild_Auction_RecordBid(sender, amount, "MS", "whisper")
+        local good, info = RedGuild_Auction_RecordBid(sender, amount, "MS", "whisper")
         if good then
-            AuctionWhisper(sender, string.format("RedGuild: main-spec bid of %d DKP recorded on %s.",
-                tonumber(amount), RedGuild_Auction.itemLink or "the item"))
+            if info then
+                AuctionWhisper(sender, string.format(
+                    "RedGuild: bidding has already closed - your main-spec bid of %d DKP on %s was recorded as LATE and may not be considered.",
+                    tonumber(amount), RedGuild_Auction.itemLink or "the item"))
+            else
+                AuctionWhisper(sender, string.format("RedGuild: main-spec bid of %d DKP recorded on %s.",
+                    tonumber(amount), RedGuild_Auction.itemLink or "the item"))
+            end
         else
-            AuctionWhisper(sender, "RedGuild: " .. (err or "bid rejected."))
+            AuctionWhisper(sender, "RedGuild: " .. (info or "bid rejected."))
         end
         return true
     end
@@ -8022,7 +8151,9 @@ end
 
 function RedGuild_Auction_OnSystemMessage(text)
     if not text then return end
-    if not RedGuild_Auction.open then return end
+    -- Gated on "posted", not "open", so a roll for a late off-spec
+    -- bid is still picked up after bidding has closed.
+    if not RedGuild_Auction.posted then return end
     if not RedGuild_Auction_IsAuctioneer() then return end
 
     local who, roll, low, high = text:match(RedGuild_RollPattern)
@@ -8149,9 +8280,7 @@ local function CreatePrompt()
     f.ruleText:SetPoint("RIGHT", f, "RIGHT", -16, 0)
     f.ruleText:SetJustifyH("LEFT")
     f.ruleText:SetWordWrap(true)
-    f.ruleText:SetText(string.format(
-        "Minimum bid %d DKP. Off spec is a roll, not a bid, and costs no DKP.\nClosing this window or pressing Escape counts as a pass.",
-        AUCTION_MIN_BID))
+    f.ruleText:SetText("Closing this window or pressing Escape counts as a pass.")
 
     f.amountBox = CreateFrame("EditBox", nil, f, "InputBoxTemplate")
     f.amountBox:SetSize(70, 20)
@@ -8206,8 +8335,12 @@ local function CreatePrompt()
 
         if not RedGuild_Auction.open then
             self.timerText:SetText("|cffff5555Closed|r")
+            self.ruleText:SetText(
+                "|cffff5555Bidding is closed.|r A bid placed now is accepted as LATE and may not be considered.")
             return
         end
+
+        self.ruleText:SetText("Closing this window or pressing Escape counts as a pass.")
 
         local left = RedGuild_Auction_TimeLeft()
         if RedGuild_Auction.paused then
@@ -8380,26 +8513,34 @@ local function CreateMaster()
     f.durBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
 
     f.startBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-    f.startBtn:SetSize(68, 22)
+    f.startBtn:SetSize(62, 22)
     f.startBtn:SetPoint("TOPLEFT", f.itemBox, "BOTTOMLEFT", -6, -8)
     f.startBtn:SetText("Post")
     f.startBtn:SetScript("OnClick", RedGuild_Auction_Start)
 
     f.pauseBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-    f.pauseBtn:SetSize(68, 22)
+    f.pauseBtn:SetSize(62, 22)
     f.pauseBtn:SetPoint("LEFT", f.startBtn, "RIGHT", 6, 0)
     f.pauseBtn:SetText("Pause")
     f.pauseBtn:SetScript("OnClick", RedGuild_Auction_TogglePause)
 
     f.stopBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-    f.stopBtn:SetSize(68, 22)
+    f.stopBtn:SetSize(62, 22)
     f.stopBtn:SetPoint("LEFT", f.pauseBtn, "RIGHT", 6, 0)
     f.stopBtn:SetText("Close")
     f.stopBtn:SetScript("OnClick", function() RedGuild_Auction_Stop(false) end)
 
+    -- Reopens the closed-but-not-yet-awarded auction without losing
+    -- the bids already collected.
+    f.reopenBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    f.reopenBtn:SetSize(62, 22)
+    f.reopenBtn:SetPoint("LEFT", f.stopBtn, "RIGHT", 6, 0)
+    f.reopenBtn:SetText("Reopen")
+    f.reopenBtn:SetScript("OnClick", RedGuild_Auction_Reopen)
+
     f.cancelBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-    f.cancelBtn:SetSize(68, 22)
-    f.cancelBtn:SetPoint("LEFT", f.stopBtn, "RIGHT", 6, 0)
+    f.cancelBtn:SetSize(62, 22)
+    f.cancelBtn:SetPoint("LEFT", f.reopenBtn, "RIGHT", 6, 0)
     f.cancelBtn:SetText("Cancel")
     f.cancelBtn:SetScript("OnClick", RedGuild_Auction_Cancel)
 
@@ -8469,7 +8610,7 @@ local function CreateMaster()
     f.hintText = f:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     f.hintText:SetPoint("BOTTOMLEFT", costLabel, "TOPLEFT", 0, 4)
     f.hintText:SetText(
-        "Off spec = roll, no DKP. Winner is never picked automatically: click a row, check the cost, award.")
+        "Winner is never picked automatically: click a row, check the cost, award.")
 
     auctionMaster = f
     return f
@@ -8497,12 +8638,20 @@ function RedGuild_Auction_RefreshMaster()
         f.startBtn:Disable()
         f.stopBtn:Enable()
         f.pauseBtn:Enable()
+        f.reopenBtn:Disable()
     else
         f.timerText:SetText(RedGuild_Auction.posted and "|cffff5555closed|r" or "")
         f.pauseBtn:SetText("Pause")
         f.startBtn:Enable()
         f.stopBtn:Disable()
         f.pauseBtn:Disable()
+        -- Reopen only makes sense once something has actually closed
+        -- without being awarded yet.
+        if RedGuild_Auction.posted then
+            f.reopenBtn:Enable()
+        else
+            f.reopenBtn:Disable()
+        end
     end
 
     ----------------------------------------------------------------
@@ -8533,6 +8682,7 @@ function RedGuild_Auction_RefreshMaster()
         local modeColour = "|cffffffff"
         if b.mode == "OS"   then modeColour = "|cff55ccff" end
         if b.mode == "PASS" then modeColour = "|cff888888" end
+        if b.late            then modeColour = "|cffff0000" end
         row.modeText:SetText(modeColour .. (b.mode or "?") .. "|r")
 
         -- Balance is looked up live from the editor's own table, not
@@ -8545,7 +8695,15 @@ function RedGuild_Auction_RefreshMaster()
         end
 
         row.rollText:SetText(b.roll and tostring(b.roll) or "")
-        row.srcText:SetText("|cff888888" .. (b.src or "") .. "|r")
+
+        -- A bid placed after bidding closed but before the item was
+        -- awarded is still recorded, but the "Via" column flags it
+        -- LATE so the editor can see it missed the window.
+        if b.late then
+            row.srcText:SetText("|cffff0000LATE|r")
+        else
+            row.srcText:SetText("|cff888888" .. (b.src or "") .. "|r")
+        end
 
         if RedGuild_Auction.selected == b.key then
             row.hl:Show()
