@@ -7340,10 +7340,10 @@ function RedGuild_Auction_Start()
     AuctionWarn(string.format(
         "Bidding OPEN on %s - %d seconds.", RedGuild_Auction.itemLink, dur))
     AuctionWarn(string.format(
-        "MAIN SPEC: bid DKP.   OFF SPEC: /roll only, flat %d DKP if you win.",
+        "MAIN SPEC: bid DKP.   OFF SPEC: /roll 69 only, flat %d DKP if you win.",
         AUCTION_OS_COST))
     AuctionAnnounce(string.format(
-        "No addon? Whisper %s:  !bid <amount>  for main spec,  or just /roll for off spec.  !pass to skip.",
+        "No addon? Whisper %s:  !bid <amount>  for main spec,  or just /roll 69 for off spec.  !pass to skip.",
         RedGuild_Auction.ml))
 
     if RedGuild_Auction.ticker then RedGuild_Auction.ticker:Cancel() end
