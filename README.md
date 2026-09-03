@@ -9,7 +9,11 @@ Required urgently:
 * Reconfirm sync tooltip accuracy
 * Warnings on functions that change dkp table version to advise editor they aren't the highest version
 * Out of guild users?
-
+* Attendance counter / Last raid (functionality linked to start new DKP week and attend/bench
+* Late bids on DKP
+* Reopen bid window option?
+* Offspec rolls are /roll 69
+  
 Features to deliver ASAP:
 * Redo the way DKP table saves to a single button commit (hook into editor rollback funcitonality)
 * Revisit audit log completely (might be better after the dkp save change)
@@ -18,6 +22,7 @@ Features to deliver ASAP:
 * show only online on the alt tracker
 * Refinement needed to Sync status for editors to find the highest version recorded for dkp table
 * End of raid reminder to sync
+* DKP Row archive (for users away from a long period)
 
 Major bugs:
 
@@ -29,6 +34,7 @@ Ideas for future releases (significant work):
 * Raid group planner
 * Tactics
 * are you back check?
+* Records last offspec roll (should be first only)
 
 
 
