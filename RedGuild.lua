@@ -42,14 +42,16 @@ RedGuild_UIReady = false
 
 local mainFrame
 local dkpPanel, altPanel, groupPanel, mlPanel, raidPanel, editorsPanel, auditPanel
+local bidLogPanel
 
 local TAB_DKP     = 1
 local TAB_ALT     = 2
 local TAB_GROUP   = 3
 local TAB_ML      = 4
-local TAB_RAID    = 5
-local TAB_EDITORS = 6
-local TAB_AUDIT   = 7
+local TAB_BIDLOG  = 5
+local TAB_RAID    = 6
+local TAB_EDITORS = 7
+local TAB_AUDIT   = 8
 
 local activeTab = TAB_DKP
 local dkpLocked = true
@@ -1216,6 +1218,7 @@ function ShowTab(id)
 	mlPanel:Hide()
     editorsPanel:Hide()
     auditPanel:Hide()
+	if bidLogPanel then bidLogPanel:Hide() end
 
     if id == TAB_DKP then
         dkpPanel:Show()
@@ -1231,6 +1234,11 @@ function ShowTab(id)
         editorsPanel:Show()
     elseif id == TAB_AUDIT then
         auditPanel:Show()
+    elseif id == TAB_BIDLOG then
+        if bidLogPanel then
+            bidLogPanel:Show()
+            RedGuild_BidLog_Refresh()
+        end
     end
 end
 
@@ -2393,6 +2401,7 @@ tabs[TAB_ML]:HookScript("OnClick", function()
 end)
 	
 	if IsEditor(UnitName("player")) then
+    CreateTab(TAB_BIDLOG, "Bid Log")
     CreateTab(TAB_RAID, "RL Tools")
     CreateTab(TAB_EDITORS, "Editors")
     CreateTab(TAB_AUDIT,   "Audit Log")
@@ -2455,6 +2464,7 @@ UpdateLockButtonText()
     raidPanel    = CreateFrame("Frame", nil, mainFrame); LayoutPanel(raidPanel)
     editorsPanel = CreateFrame("Frame", nil, mainFrame); LayoutPanel(editorsPanel)
     auditPanel   = CreateFrame("Frame", nil, mainFrame); LayoutPanel(auditPanel)
+    bidLogPanel  = CreateFrame("Frame", nil, mainFrame); LayoutPanel(bidLogPanel)
 	
 --------------------------------------------------------------------
 -- ALT TRACKER PANEL
@@ -6864,7 +6874,7 @@ end
 end
 
 ---------------------------------------------------------
--- 5b. CHAT_MSG_SYSTEM (off-spec /roll 69  capture during bidding)
+-- 5b. CHAT_MSG_SYSTEM (off-spec roll capture during bidding)
 ---------------------------------------------------------
 if event == "CHAT_MSG_SYSTEM" then
     RedGuild_Auction_OnSystemMessage(arg1)
@@ -7055,10 +7065,12 @@ end
 --==================================================================
 
 local AUCTION_DEFAULT_DURATION = 30
--- Flat price of an off-spec win. Off spec is decided by /roll 69, but
+-- Flat price of an off-spec win. Off spec is decided by the roll, but
 -- the winner always pays this fixed amount. Change this one number
 -- if the guild ever changes the rule.
 local AUCTION_OS_COST          = 5
+-- Smallest main-spec bid the addon will accept.
+local AUCTION_MIN_BID          = 10
 local AUCTION_MAX_ROWS         = 60
 
 -- Runtime only. Deliberately not a SavedVariable: an auction should
@@ -7073,6 +7085,7 @@ RedGuild_Auction = {
     duration   = AUCTION_DEFAULT_DURATION,
     endTime    = nil,
     paused     = false,
+    myBid      = nil,     -- what this client submitted, for the log
     remaining  = nil,   -- seconds frozen on the clock while paused
     ticker     = nil,
     bids       = {},      -- [character] = { name, key, amount, mode, src, roll, at }
@@ -7080,7 +7093,67 @@ RedGuild_Auction = {
 }
 
 local auctionMaster      -- editor window
-local auctionButton      -- title-bar button on the main window
+local auctionButton      -- Bidding button on the DKP tab
+local auctionLogButton   -- Bidding button on the Bid Log tab
+local AUCTION_LOG_MAX    = 250
+
+--------------------------------------------------
+-- Bid log
+--------------------------------------------------
+-- Kept inside RedGuild_Config, which is already a SavedVariable and
+-- is never serialised into a sync payload, so the .toc needs no new
+-- entry and the log never inflates addon messages.
+--
+-- Each client records only what it legitimately saw. The auctioneer
+-- receives every bid, so an editor logs the full book. Everyone else
+-- only ever sees the award broadcast plus whatever they sent
+-- themselves, so that is exactly what their log holds.
+local function EnsureBidLog()
+    RedGuild_Config.bidLog = RedGuild_Config.bidLog or {}
+    return RedGuild_Config.bidLog
+end
+
+function RedGuild_BidLog_Add(entry)
+    local log = EnsureBidLog()
+    table.insert(log, 1, entry)      -- newest first
+    while #log > AUCTION_LOG_MAX do
+        table.remove(log)
+    end
+    if RedGuild_BidLog_Refresh then RedGuild_BidLog_Refresh() end
+end
+
+-- Snapshot of the current auction, from the point of view of
+-- whoever is running this client.
+local function BuildLogEntry(winner, cost, mode, cancelled)
+    local bids = {}
+
+    if RedGuild_Auction_IsAuctioneer() then
+        for _, b in ipairs(RedGuild_Auction_SortedBids()) do
+            table.insert(bids, {
+                name   = b.name,
+                amount = b.amount,
+                mode   = b.mode,
+                roll   = b.roll,
+                src    = b.src,
+            })
+        end
+    elseif RedGuild_Auction.myBid then
+        table.insert(bids, RedGuild_Auction.myBid)
+    end
+
+    return {
+        t         = time(),
+        when      = date("%d.%m %H:%M"),
+        item      = RedGuild_Auction.itemLink,
+        ml        = RedGuild_Auction.ml,
+        winner    = winner,
+        cost      = cost or 0,
+        mode      = mode,
+        cancelled = cancelled or nil,
+        full      = RedGuild_Auction_IsAuctioneer() or nil,
+        bids      = bids,
+    }
+end
 local auctionPrompt      -- bidder popup
 local auctionMasterRows = {}
 
@@ -7192,6 +7265,70 @@ end
 -- Bid book
 --------------------------------------------------
 
+-- Push the current DKP table so nobody bids against a stale balance,
+-- and so everyone sees the new balance right after an award.
+-- This is a normal DATA sync, not FORCE_REQ: recipients apply it only
+-- if their dkpVersion is behind, and it raises no prompt. FORCE_REQ
+-- would ask every guild member to accept an overwrite, which is far
+-- too heavy to fire once per item.
+-- The DKP table is far bigger than one addon message, so a push is
+-- dozens of chunks. RedGuild_Send fires them in a tight loop, which is
+-- fine for an occasional manual sync but risks tripping the server
+-- addon-message throttle when it happens automatically on every item.
+-- These pushes are background traffic, so space them out instead.
+local AUCTION_SYNC_CHUNK_DELAY = 0.15
+
+local function AuctionSendThrottled(msgType, payload)
+    RedGuild_OutboundSeq = RedGuild_OutboundSeq + 1
+    local seq   = RedGuild_OutboundSeq
+    local total = math.ceil(#payload / REDGUILD_MAX_CHUNK)
+    if total == 0 then total = 1 end
+
+    for i = 1, total do
+        local startIdx = (i - 1) * REDGUILD_MAX_CHUNK + 1
+        local chunk    = payload:sub(startIdx, startIdx + REDGUILD_MAX_CHUNK - 1)
+        local msg      = string.format("%s:%s:%d:%d:%d:%s",
+            REDGUILD_CHAT_PREFIX, msgType, seq, i, total, chunk)
+
+        C_Timer.After((i - 1) * AUCTION_SYNC_CHUNK_DELAY, function()
+            C_ChatInfo.SendAddonMessage(REDGUILD_CHAT_PREFIX, msg, "GUILD")
+        end)
+    end
+
+    return total
+end
+
+local lastPushedVersion, lastPushTime = nil, 0
+
+function RedGuild_Auction_PushSync(reason)
+    if not IsAuthorized() then return end
+    if RedGuild_SyncLocked then return end
+    if RedGuild_Config.hideMeFromSync then
+        AuctionPrint("DKP not synced - 'Hide me from SYNC' is enabled.")
+        return
+    end
+
+    -- Recipients discard a push whose dkpVersion is not ahead of
+    -- their own, so resending an unchanged table is pure traffic.
+    -- An award bumps the version, so the post-award push always goes.
+    local ver = tonumber(RedGuild_Config.dkpVersion or 0)
+    if lastPushedVersion == ver and (GetTime() - lastPushTime) < 300 then
+        D("Auction sync skipped - nothing changed since the last push")
+        return
+    end
+    lastPushedVersion, lastPushTime = ver, GetTime()
+
+    local payload = BuildSyncPayload()
+    -- ApplySyncData reads dkpVersion from the top level of the
+    -- payload, so it has to be set here or every recipient will
+    -- read version 0 and discard the update.
+    payload.dkpVersion = tonumber(RedGuild_Config.dkpVersion or 0)
+
+    local chunks = AuctionSendThrottled("DATA", EncodePayload(payload))
+    D(string.format("Auction sync pushed (%s) in %d chunks",
+        tostring(reason), chunks))
+end
+
 local function AuctionResetBook()
     RedGuild_Auction.bids     = {}
     RedGuild_Auction.selected = nil
@@ -7237,14 +7374,15 @@ function RedGuild_Auction_RecordBid(player, amount, mode, src, roll)
     mode   = mode or "MS"
     amount = tonumber(amount) or 0
 
-    -- Off spec is decided purely by /roll 69, never by bidding, but it
+    -- Off spec is decided purely by the roll, never by bidding, but it
     -- carries a fixed price. Passes carry nothing.
     if mode == "OS"   then amount = AUCTION_OS_COST end
     if mode == "PASS" then amount = 0 end
 
     if mode == "MS" then
-        if amount < 1 then
-            return false, "Main-spec bids must be at least 1 DKP."
+        if amount < AUCTION_MIN_BID then
+            return false, string.format(
+                "Main-spec bids must be at least %d DKP.", AUCTION_MIN_BID)
         end
         if amount > bal then
             return false, string.format("Bid of %d exceeds your balance of %d DKP.", amount, bal)
@@ -7279,7 +7417,8 @@ end
 -- Editor: start / stop / cancel / award
 --------------------------------------------------
 
-function RedGuild_Auction_SetItem(link)
+-- Loads an item into the slot. Never starts an auction.
+function RedGuild_Auction_ApplyItem(link)
     if not link then return end
     local name, itemLink, _, _, _, _, _, _, _, icon = GetItemInfo(link)
     itemLink = itemLink or link
@@ -7292,6 +7431,38 @@ function RedGuild_Auction_SetItem(link)
         auctionMaster.itemIcon:SetTexture(icon or (RedGuild_Auction.itemID and GetItemIcon(RedGuild_Auction.itemID)) or "Interface\\Icons\\INV_Misc_QuestionMark")
     end
 end
+
+-- Public entry point used by the drop slot, the link box and the
+-- shift-click hook. While an item is already posted, swapping is
+-- confirmed first so a stray drag cannot silently replace the item
+-- the raid is bidding on. Swapping never starts a new auction.
+function RedGuild_Auction_SetItem(link)
+    if not link then return end
+
+    if RedGuild_Auction.posted then
+        RedGuild_Auction.pendingSwap = link
+        StaticPopup_Show("REDGUILD_BID_SWAP_ITEM")
+        return
+    end
+
+    RedGuild_Auction_ApplyItem(link)
+end
+
+StaticPopupDialogs["REDGUILD_BID_SWAP_ITEM"] = {
+    text = "Bidding is already running on this item.\n\nReplace it? The current auction is cancelled and all bids are discarded.\n\nThis does NOT start a new auction - press Post when you are ready.",
+    button1 = "Replace item",
+    button2 = "Keep bidding",
+    OnAccept = function()
+        local link = RedGuild_Auction.pendingSwap
+        RedGuild_Auction.pendingSwap = nil
+        RedGuild_Auction_Cancel()
+        if link then RedGuild_Auction_ApplyItem(link) end
+    end,
+    OnCancel = function()
+        RedGuild_Auction.pendingSwap = nil
+    end,
+    timeout = 0, whileDead = true, hideOnEscape = true, preferredIndex = 3,
+}
 
 function RedGuild_Auction_Start()
     if not IsAuthorized() then
@@ -7326,6 +7497,7 @@ function RedGuild_Auction_Start()
     RedGuild_Auction.endTime  = GetTime() + dur
     RedGuild_Auction.paused   = false
     RedGuild_Auction.remaining = nil
+    RedGuild_Auction.myBid    = nil
     RedGuild_Auction.open     = true
     RedGuild_Auction.posted   = true
 
@@ -7340,11 +7512,13 @@ function RedGuild_Auction_Start()
     AuctionWarn(string.format(
         "Bidding OPEN on %s - %d seconds.", RedGuild_Auction.itemLink, dur))
     AuctionWarn(string.format(
-        "MAIN SPEC: bid DKP.   OFF SPEC: /roll 69 only, flat %d DKP if you win.",
-        AUCTION_OS_COST))
+        "MAIN SPEC: bid DKP, minimum %d.   OFF SPEC: /roll 69 only, flat %d DKP if you win.",
+        AUCTION_MIN_BID, AUCTION_OS_COST))
     AuctionAnnounce(string.format(
         "No addon? Whisper %s:  !bid <amount>  for main spec,  or just /roll 69 for off spec.  !pass to skip.",
         RedGuild_Auction.ml))
+
+    RedGuild_Auction_PushSync("auction start")
 
     if RedGuild_Auction.ticker then RedGuild_Auction.ticker:Cancel() end
     RedGuild_Auction.ticker = C_Timer.NewTicker(1, function()
@@ -7391,7 +7565,7 @@ function RedGuild_Auction_Pause()
     }))
 
     AuctionWarn(string.format(
-        "Bidding PAUSED on %s with %d seconds held. You can still bid.",
+        "Bidding PAUSED on %s with %d seconds left. You can still bid.",
         RedGuild_Auction.itemLink or "the item", RedGuild_Auction_TimeLeft()))
 
     RedGuild_Auction_RefreshMaster()
@@ -7459,6 +7633,7 @@ function RedGuild_Auction_Cancel()
     if not RedGuild_Auction.posted then return end
 
     if RedGuild_Auction_IsAuctioneer() then
+        RedGuild_BidLog_Add(BuildLogEntry(nil, 0, nil, true))
         RedGuild_Send("BID_CANCEL", EncodePayload({ id = RedGuild_Auction.id }))
         AuctionWarn(string.format(
             "Bidding CANCELLED on %s. No DKP has been charged.",
@@ -7515,12 +7690,15 @@ function RedGuild_Auction_Award(winner, cost)
             BumpDKPVersion()
             if UpdateTable then UpdateTable() end
             if UpdateSyncStatus then UpdateSyncStatus() end
+            RedGuild_Auction_PushSync("item awarded")
         end
     end
 
     local bid  = RedGuild_Auction.bids[who]
     local mode = bid and bid.mode or "MS"
     local roll = bid and bid.roll
+
+    RedGuild_BidLog_Add(BuildLogEntry(who, cost, mode, false))
 
     RedGuild_Send("BID_AWARD", EncodePayload({
         id     = RedGuild_Auction.id,
@@ -7582,8 +7760,10 @@ function RedGuild_Auction_SendBid(amount, mode)
     local bal = RedGuild_Auction_GetBalance(UnitName("player"))
 
     if mode == "MS" then
-        if amount < 1 then
-            AuctionPrint("Enter an amount of at least 1 DKP. Off spec is the roll button, not a bid.")
+        if amount < AUCTION_MIN_BID then
+            AuctionPrint(string.format(
+                "Minimum bid is %d DKP. Off spec is the roll button, not a bid.",
+                AUCTION_MIN_BID))
             return
         end
         if amount > bal then
@@ -7597,6 +7777,15 @@ function RedGuild_Auction_SendBid(amount, mode)
         amount = amount,
         mode   = mode,
     }), RedGuild_Auction.ml)
+
+    -- Kept so this client can write its own entry in the Bid Log
+    -- when the award is announced.
+    RedGuild_Auction.myBid = {
+        name   = Ambiguate(UnitName("player"), "short"),
+        amount = amount,
+        mode   = mode,
+        src    = "addon",
+    }
 
     if mode == "OS" then
         -- A real Blizzard roll so the whole raid can see it and the
@@ -7637,6 +7826,7 @@ function RedGuild_Auction_OnAddonMessage(msgType, payload, sender)
         RedGuild_Auction.endTime  = GetTime() + RedGuild_Auction.duration
         RedGuild_Auction.paused   = false
         RedGuild_Auction.remaining = nil
+        RedGuild_Auction.myBid    = nil
         RedGuild_Auction.open     = true
         RedGuild_Auction.posted   = true
         AuctionResetBook()
@@ -7686,6 +7876,7 @@ function RedGuild_Auction_OnAddonMessage(msgType, payload, sender)
     ----------------------------------------------------------------
     if msgType == "BID_CANCEL" then
         if data.id ~= RedGuild_Auction.id then return end
+        RedGuild_BidLog_Add(BuildLogEntry(nil, 0, nil, true))
         RedGuild_Auction.open   = false
         RedGuild_Auction.posted = false
         AuctionResetBook()
@@ -7696,6 +7887,9 @@ function RedGuild_Auction_OnAddonMessage(msgType, payload, sender)
     ----------------------------------------------------------------
     if msgType == "BID_AWARD" then
         if data.id ~= RedGuild_Auction.id then return end
+
+        RedGuild_BidLog_Add(BuildLogEntry(
+            data.winner, tonumber(data.cost) or 0, data.mode, false))
         RedGuild_Auction.open   = false
         RedGuild_Auction.posted = false
         AuctionResetBook()
@@ -7768,7 +7962,7 @@ function RedGuild_Auction_OnWhisper(text, sender)
     if lower == "!os" then
         RedGuild_Auction_RecordBid(sender, 0, "OS", "whisper")
         AuctionWhisper(sender, string.format(
-            "RedGuild: off spec noted, flat %d DKP if you win it. Now /roll and I will pick it up.",
+            "RedGuild: off spec noted, flat %d DKP if you win it. Now /roll 69 and I will pick it up.",
             AUCTION_OS_COST))
         return true
     end
@@ -7783,7 +7977,7 @@ function RedGuild_Auction_OnWhisper(text, sender)
         if tail and (tail:find("os", 1, true) or tail:find("off", 1, true)) then
             RedGuild_Auction_RecordBid(sender, 0, "OS", "whisper")
             AuctionWhisper(sender, string.format(
-                "RedGuild: off spec is roll only, you do not bid DKP for it. Noted as off spec at the flat %d DKP - now /roll.",
+                "RedGuild: off spec is roll only, you do not bid DKP for it. Noted as off spec at the flat %d DKP - now /roll 69.",
                 AUCTION_OS_COST))
             return true
         end
@@ -7800,8 +7994,8 @@ function RedGuild_Auction_OnWhisper(text, sender)
 
     if lower:match("^!bid") then
         AuctionWhisper(sender, string.format(
-            "RedGuild: use  !bid <amount>  for main spec, for example  !bid 50. Off spec is /roll only, flat %d DKP.",
-            AUCTION_OS_COST))
+            "RedGuild: use  !bid <amount>  for main spec, minimum %d, for example  !bid 50. Off spec is /roll 69 only, flat %d DKP.",
+            AUCTION_MIN_BID, AUCTION_OS_COST))
         return true
     end
 
@@ -7828,11 +8022,27 @@ function RedGuild_Auction_OnSystemMessage(text)
     local bid = RedGuild_Auction.bids[who]
 
     if bid then
-        -- Already registered an off-spec interest; attach the roll.
-        if bid.mode == "OS" then
-            bid.roll = tonumber(roll)
-            RedGuild_Auction_RefreshMaster()
+        -- Main-spec bidders are not converted by rolling.
+        if bid.mode ~= "OS" then return end
+
+        -- Only the first roll counts. Later ones are ignored, and
+        -- the roller is told once so they are not left thinking a
+        -- reroll replaced their result.
+        if bid.roll then
+            if not bid.rollWarned then
+                bid.rollWarned = true
+                AuctionWhisper(who, string.format(
+                    "RedGuild: only your first roll counts. Your %d stands, later rolls are ignored.",
+                    bid.roll))
+                AuctionPrint(string.format(
+                    "%s rolled again (%d) - ignored, first roll of %d stands.",
+                    who, tonumber(roll), bid.roll))
+            end
+            return
         end
+
+        bid.roll = tonumber(roll)
+        RedGuild_Auction_RefreshMaster()
     else
         -- Someone rolled without registering. Treat as an off-spec roll
         -- so people who just /roll are not silently dropped.
@@ -7893,14 +8103,15 @@ local function CreatePrompt()
 
     local bidLabel = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     bidLabel:SetPoint("TOPLEFT", f.balText, "BOTTOMLEFT", 0, -12)
-    bidLabel:SetText("Main spec bid:")
+    bidLabel:SetText(string.format("Main spec bid (min %d):", AUCTION_MIN_BID))
 
     f.ruleText = f:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     f.ruleText:SetPoint("TOPLEFT", bidLabel, "BOTTOMLEFT", 0, -14)
     f.ruleText:SetPoint("RIGHT", f, "RIGHT", -16, 0)
     f.ruleText:SetJustifyH("LEFT")
     f.ruleText:SetText(string.format(
-        "Off spec is a roll, not a bid - flat %d DKP if you win.", AUCTION_OS_COST))
+        "Minimum bid %d DKP. Off spec is a roll, not a bid - flat %d DKP if you win.",
+        AUCTION_MIN_BID, AUCTION_OS_COST))
 
     f.amountBox = CreateFrame("EditBox", nil, f, "InputBoxTemplate")
     f.amountBox:SetSize(70, 20)
@@ -7924,7 +8135,7 @@ local function CreatePrompt()
     f.osBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
     f.osBtn:SetSize(90, 24)
     f.osBtn:SetPoint("LEFT", f.bidBtn, "RIGHT", 6, 0)
-    f.osBtn:SetText("Off spec /roll")
+    f.osBtn:SetText("Off spec /roll 69")
     f.osBtn:SetScript("OnClick", function()
         RedGuild_Auction_SendBid(0, "OS")
     end)
@@ -8328,17 +8539,18 @@ end
 --------------------------------------------------
 
 function RedGuild_Auction_AttachUI()
-    if not mainFrame then return end
+    if not mainFrame or not dkpPanel then return end
     if auctionButton then return end
 
-    local btn = CreateFrame("Button", "RedGuildBiddingButton", mainFrame, "UIPanelButtonTemplate")
+    -- Parented to the DKP panel, so it is present on the DKP tab and
+    -- hides with it. Visibility is still gated on being an editor.
+    local btn = CreateFrame("Button", "RedGuildBiddingButton", dkpPanel, "UIPanelButtonTemplate")
     btn:SetSize(70, 18)
     btn:SetText("Bidding")
     btn:SetFrameStrata("HIGH")
     btn:SetScript("OnClick", RedGuild_Auction_ShowMaster)
 
-    -- Sit just left of the Sync indicator in the title bar so the
-    -- button is reachable from every tab. statusText is created by
+    -- Sits just left of the Sync indicator. statusText is created by
     -- CreateUI; fall back to the frame corner if it is missing.
     local syncWidget = statusText and statusText:GetParent()
     if syncWidget then
@@ -8358,11 +8570,366 @@ function RedGuild_Auction_AttachUI()
 
     auctionButton = btn
 
-    -- Editors only, re-checked each time the window opens so the
-    -- button appears as soon as an editor list sync arrives.
+    -- Editors only. Re-checked whenever the window opens or the DKP
+    -- tab is shown, so the button appears as soon as an editor list
+    -- sync arrives rather than needing a reload.
     local function UpdateBidButton()
         if IsEditor(UnitName("player")) then btn:Show() else btn:Hide() end
     end
     UpdateBidButton()
     mainFrame:HookScript("OnShow", UpdateBidButton)
+    dkpPanel:HookScript("OnShow", UpdateBidButton)
 end
+
+
+--==================================================================
+-- BID LOG TAB
+--==================================================================
+-- Editors see every bid that was placed. Everyone else sees the
+-- outcome of each auction plus their own bid, because that is all
+-- their client ever received.
+--==================================================================
+
+local bidLogRows    = {}
+local bidLogDetail  = {}
+local bidLogSelected
+
+local function BidLogIsEditor()
+    return IsEditor(UnitName("player")) and true or false
+end
+
+local function BidLogStripLink(link)
+    if not link then return "unknown item" end
+    local name = link:match("|h%[(.-)%]|h")
+    return name or link
+end
+
+--------------------------------------------------
+-- Rows
+--------------------------------------------------
+
+local function CreateLogRow(index, parent)
+    local row = CreateFrame("Button", nil, parent)
+    row:SetSize(700, 16)
+    row:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -((index - 1) * 16))
+
+    row.hl = row:CreateTexture(nil, "BACKGROUND")
+    row.hl:SetAllPoints(row)
+    row.hl:SetColorTexture(0.3, 0.5, 0.9, 0.35)
+    row.hl:Hide()
+
+    local function mk(x, w, justify)
+        local fs = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        fs:SetPoint("LEFT", row, "LEFT", x, 0)
+        fs:SetWidth(w)
+        fs:SetJustifyH(justify or "LEFT")
+        return fs
+    end
+
+    row.whenText   = mk(4,    85)
+    row.itemText   = mk(95,  250)
+    row.winnerText = mk(350, 110)
+    row.costText   = mk(465,  55, "RIGHT")
+    row.modeText   = mk(528,  55)
+    row.countText  = mk(588, 100, "RIGHT")
+
+    row:SetScript("OnClick", function(self)
+        bidLogSelected = self.entryIndex
+        RedGuild_BidLog_Refresh()
+    end)
+
+    row:SetScript("OnEnter", function(self)
+        if not self.itemLink then return end
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetHyperlink(self.itemLink)
+        GameTooltip:Show()
+    end)
+    row:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+    return row
+end
+
+local function CreateDetailRow(index, parent)
+    local row = CreateFrame("Frame", nil, parent)
+    row:SetSize(700, 14)
+    row:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -((index - 1) * 14))
+
+    local function mk(x, w, justify)
+        local fs = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        fs:SetPoint("LEFT", row, "LEFT", x, 0)
+        fs:SetWidth(w)
+        fs:SetJustifyH(justify or "LEFT")
+        return fs
+    end
+
+    row.nameText   = mk(4,   130)
+    row.bidText    = mk(140,  55, "RIGHT")
+    row.modeText   = mk(203,  50)
+    row.rollText   = mk(258,  50, "RIGHT")
+    row.srcText    = mk(316,  70)
+    row.resultText = mk(392, 160)
+
+    return row
+end
+
+--------------------------------------------------
+-- Panel
+--------------------------------------------------
+
+function RedGuild_BidLog_Build()
+    if not bidLogPanel or bidLogPanel.built then return end
+    local p = bidLogPanel
+
+    ----------------------------------------------------------------
+    local title = p:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    title:SetPoint("TOPLEFT", p, "TOPLEFT", 25, -42)
+    title:SetText("Bid Log")
+
+    p.subText = p:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    p.subText:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -2)
+
+    ----------------------------------------------------------------
+    -- Bidding button, editors only
+    ----------------------------------------------------------------
+    local bidBtn = CreateFrame("Button", "RedGuildBidLogBiddingButton", p, "UIPanelButtonTemplate")
+    bidBtn:SetSize(80, 20)
+    bidBtn:SetPoint("TOPRIGHT", p, "TOPRIGHT", -45, -42)
+    bidBtn:SetText("Bidding")
+    bidBtn:SetScript("OnClick", RedGuild_Auction_ShowMaster)
+    bidBtn:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_BOTTOMLEFT")
+        GameTooltip:AddLine("|cffffff00Item Bidding|r")
+        GameTooltip:AddLine("Post an item and collect DKP bids from the raid.", 1, 1, 1)
+        GameTooltip:Show()
+    end)
+    bidBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    auctionLogButton = bidBtn
+
+    local clearBtn = CreateFrame("Button", nil, p, "UIPanelButtonTemplate")
+    clearBtn:SetSize(80, 20)
+    clearBtn:SetPoint("RIGHT", bidBtn, "LEFT", -6, 0)
+    clearBtn:SetText("Clear log")
+    clearBtn:SetScript("OnClick", function()
+        StaticPopup_Show("REDGUILD_CLEAR_BIDLOG")
+    end)
+    p.clearBtn = clearBtn
+
+    ----------------------------------------------------------------
+    -- Column headers
+    ----------------------------------------------------------------
+    local head = CreateFrame("Frame", nil, p)
+    head:SetPoint("TOPLEFT", p, "TOPLEFT", 25, -88)
+    head:SetSize(700, 14)
+
+    local function hdr(parent, x, w, text, justify)
+        local fs = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        fs:SetPoint("LEFT", parent, "LEFT", x, 0)
+        fs:SetWidth(w)
+        fs:SetJustifyH(justify or "LEFT")
+        fs:SetText(text)
+        return fs
+    end
+    hdr(head, 4,    85, "When")
+    hdr(head, 95,  250, "Item")
+    hdr(head, 350, 110, "Awarded to")
+    hdr(head, 465,  55, "Cost", "RIGHT")
+    hdr(head, 528,  55, "Type")
+    hdr(head, 588, 100, "Bids", "RIGHT")
+
+    ----------------------------------------------------------------
+    -- Auction list
+    ----------------------------------------------------------------
+    local scroll = CreateFrame("ScrollFrame", "RedGuildBidLogScroll", p, "UIPanelScrollFrameTemplate")
+    scroll:SetPoint("TOPLEFT", head, "BOTTOMLEFT", 0, -4)
+    scroll:SetPoint("BOTTOMRIGHT", p, "BOTTOMRIGHT", -45, 205)
+
+    local child = CreateFrame("Frame", nil, scroll)
+    child:SetSize(700, 16)
+    scroll:SetScrollChild(child)
+    p.listChild = child
+
+    p.emptyText = p:CreateFontString(nil, "OVERLAY", "GameFontDisableLarge")
+    p.emptyText:SetPoint("CENTER", scroll, "CENTER", 0, 0)
+    p.emptyText:SetText("No bidding recorded yet.")
+    p.emptyText:Hide()
+
+    ----------------------------------------------------------------
+    -- Detail pane
+    ----------------------------------------------------------------
+    p.detailTitle = p:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    p.detailTitle:SetPoint("TOPLEFT", scroll, "BOTTOMLEFT", 0, -10)
+    p.detailTitle:SetText("Select an auction above")
+
+    local dhead = CreateFrame("Frame", nil, p)
+    dhead:SetPoint("TOPLEFT", p.detailTitle, "BOTTOMLEFT", 0, -4)
+    dhead:SetSize(700, 14)
+    hdr(dhead, 4,   130, "Bidder")
+    hdr(dhead, 140,  55, "Bid", "RIGHT")
+    hdr(dhead, 203,  50, "Type")
+    hdr(dhead, 258,  50, "Roll", "RIGHT")
+    hdr(dhead, 316,  70, "Via")
+    hdr(dhead, 392, 160, "Result")
+    p.detailHead = dhead
+
+    local dscroll = CreateFrame("ScrollFrame", "RedGuildBidLogDetailScroll", p, "UIPanelScrollFrameTemplate")
+    dscroll:SetPoint("TOPLEFT", dhead, "BOTTOMLEFT", 0, -4)
+    dscroll:SetPoint("BOTTOMRIGHT", p, "BOTTOMRIGHT", -45, 40)
+
+    local dchild = CreateFrame("Frame", nil, dscroll)
+    dchild:SetSize(700, 14)
+    dscroll:SetScrollChild(dchild)
+    p.detailChild = dchild
+
+    p.built = true
+end
+
+--------------------------------------------------
+-- Refresh
+--------------------------------------------------
+
+function RedGuild_BidLog_Refresh()
+    if not bidLogPanel then return end
+    RedGuild_BidLog_Build()
+    if not bidLogPanel:IsShown() then return end
+
+    local p        = bidLogPanel
+    local log      = (RedGuild_Config and RedGuild_Config.bidLog) or {}
+    local isEditor = BidLogIsEditor()
+
+    ----------------------------------------------------------------
+    -- Editor-only controls
+    ----------------------------------------------------------------
+    if isEditor then
+        auctionLogButton:Show()
+        p.clearBtn:Show()
+        p.subText:SetText("Every bid placed in each auction.")
+    else
+        auctionLogButton:Hide()
+        p.clearBtn:Hide()
+        p.subText:SetText("Items awarded, and the bids you placed yourself.")
+    end
+
+    ----------------------------------------------------------------
+    -- Auction list
+    ----------------------------------------------------------------
+    local shown = math.min(#log, 250)
+    p.emptyText:SetShown(shown == 0)
+
+    for i = 1, shown do
+        local e   = log[i]
+        local row = bidLogRows[i]
+        if not row then
+            row = CreateLogRow(i, p.listChild)
+            bidLogRows[i] = row
+        end
+
+        row.entryIndex = i
+        row.itemLink   = e.item
+
+        row.whenText:SetText("|cff888888" .. (e.when or "") .. "|r")
+        row.itemText:SetText(e.item or "unknown item")
+
+        if e.cancelled then
+            row.winnerText:SetText("|cffff5555cancelled|r")
+            row.costText:SetText("|cff888888-|r")
+            row.modeText:SetText("")
+        else
+            row.winnerText:SetText(e.winner or "|cff888888-|r")
+            row.costText:SetText(tostring(e.cost or 0))
+            local modeColour = (e.mode == "OS") and "|cff55ccff" or "|cffffffff"
+            row.modeText:SetText(modeColour .. (e.mode or "") .. "|r")
+        end
+
+        -- An editor's entry holds the whole book, so the count is real.
+        -- A player's entry only ever holds their own bid, so showing a
+        -- number there would be misleading.
+        if e.full then
+            row.countText:SetText("|cff888888" .. #(e.bids or {}) .. "|r")
+        elseif e.bids and #e.bids > 0 then
+            row.countText:SetText("|cff888888you bid|r")
+        else
+            row.countText:SetText("")
+        end
+
+        row.hl:SetShown(bidLogSelected == i)
+        row:Show()
+    end
+
+    for i = shown + 1, #bidLogRows do
+        bidLogRows[i]:Hide()
+    end
+    p.listChild:SetHeight(math.max(1, shown * 16))
+
+    ----------------------------------------------------------------
+    -- Detail pane
+    ----------------------------------------------------------------
+    local entry = bidLogSelected and log[bidLogSelected] or nil
+
+    if not entry then
+        p.detailTitle:SetText("Select an auction above")
+        for _, r in ipairs(bidLogDetail) do r:Hide() end
+        p.detailChild:SetHeight(1)
+        return
+    end
+
+    if entry.cancelled then
+        p.detailTitle:SetText(string.format("%s  |cffff5555cancelled|r",
+            BidLogStripLink(entry.item)))
+    else
+        p.detailTitle:SetText(string.format(
+            "%s  won by |cffffff00%s|r for |cffffff00%d|r DKP  (%s, run by %s)",
+            BidLogStripLink(entry.item),
+            entry.winner or "nobody", entry.cost or 0,
+            entry.mode or "?", entry.ml or "?"))
+    end
+
+    local bids = entry.bids or {}
+    for i = 1, #bids do
+        local b   = bids[i]
+        local row = bidLogDetail[i]
+        if not row then
+            row = CreateDetailRow(i, p.detailChild)
+            bidLogDetail[i] = row
+        end
+
+        row.nameText:SetText(b.name or "?")
+        row.bidText:SetText((b.mode == "PASS") and "|cff888888-|r" or tostring(b.amount or 0))
+
+        local modeColour = "|cffffffff"
+        if b.mode == "OS"   then modeColour = "|cff55ccff" end
+        if b.mode == "PASS" then modeColour = "|cff888888" end
+        row.modeText:SetText(modeColour .. (b.mode or "") .. "|r")
+
+        row.rollText:SetText(b.roll and tostring(b.roll) or "")
+        row.srcText:SetText("|cff888888" .. (b.src or "") .. "|r")
+
+        if entry.winner and b.name == entry.winner then
+            row.resultText:SetText("|cff00ff00won the item|r")
+        else
+            row.resultText:SetText("")
+        end
+
+        row:Show()
+    end
+
+    for i = #bids + 1, #bidLogDetail do
+        bidLogDetail[i]:Hide()
+    end
+    p.detailChild:SetHeight(math.max(1, #bids * 14))
+
+    if #bids == 0 and not entry.cancelled and not entry.full then
+        p.detailTitle:SetText(p.detailTitle:GetText() .. "   |cff888888(you did not bid)|r")
+    end
+end
+
+StaticPopupDialogs["REDGUILD_CLEAR_BIDLOG"] = {
+    text = "Clear your entire bid log?\n\nThis only clears your own copy.",
+    button1 = "Clear",
+    button2 = "Cancel",
+    OnAccept = function()
+        RedGuild_Config.bidLog = {}
+        bidLogSelected = nil
+        RedGuild_BidLog_Refresh()
+    end,
+    timeout = 0, whileDead = true, hideOnEscape = true, preferredIndex = 3,
+}
