@@ -5,28 +5,37 @@ IS ADDON CURRENTLY SAFE TO USE : YES
 NOTE - YOU SHOULD ONLY USE THE RELEASE VERSION ON CURSEFORGE.  THE LUA LISTED HERE IS IN DEVELOPMENT
 
 Required urgently:
-* Prevent out of date editors from syncing at all
+* Finish Editor tab code to record editors versions and prio the highest version for dkp table
+* Prevent out of date editors from syncing to users completely (requires finishing the editors tab version sync/check code)?
 * Reconfirm sync tooltip accuracy
-* Warnings on functions that change dkp table version to advise editor they aren't the highest version
-* Out of guild users?
-* Attendance counter / Last raid (functionality linked to start new DKP week and attend/bench
-* Late bids on DKP
-* Reopen bid window option?
-* Offspec rolls are /roll 69
+* Warnings on functions that change dkp table version to advise editor they aren't the highest version (also requires finishing the editors tab version sync/check code)
+* Out of guild users?  (specifically being able to add them to dkp table)
+* Attendance counter / Last raid (functionality linked to start new DKP week and attend/bench)  Note - will require a dummy date to be added for rows unlikely to ever update
+* Late bids on DKP auction (with flag to show bid was late)
+* Offspec rolls button to /roll 69
+* Forcesync before/after an auction
   
 Features to deliver ASAP:
 * Redo the way DKP table saves to a single button commit (hook into editor rollback funcitonality)
 * Revisit audit log completely (might be better after the dkp save change)
 * Use alt data for editors to remove their alts from sync (better data integrity) - currently their alts are exposed to auto sync from other editors.
 * Add a small sync to check table version between non editors and colour the sync info if out of date
-* show only online on the alt tracker
-* Refinement needed to Sync status for editors to find the highest version recorded for dkp table
-* End of raid reminder to sync
-* DKP Row archive (for users away from a long period)
-
+* Show only online filter option on the alt tracker
+* End of raid reminder to sync (may not be needed if the auction forcesync is added)
+* DKP Row archive (for users away for a long period)
+* Reopen bid window option (user)?
+* Full code rebuilt (claude)
+* Conversion to multi lua file version
+  
 Major bugs:
 
 Outstanding bugs:
+* Autosync on login still isnt working properly
+* Request sync doesn't work (check who it choses it from too and when the editors version codes fixed it should pick the highest version)
+* Editors decline force sync not showing/working?
+* Version control on editors tab isn't right and we need that functionality to fix/improve lots of other things
+* Multiple rolls are recorded during auctions, needs to just be first and warn user it has only accepted the first roll
+* Item swapping during bids doesn't start a new bid (confirmation box to stop accidental ones whilst bidding is ongoing)
 
 Ideas for future releases (significant work):
 * Colour coding in the logs to make them easier to read (and full redesign of log tab tbh)
