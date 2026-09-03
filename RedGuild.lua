@@ -6864,7 +6864,7 @@ end
 end
 
 ---------------------------------------------------------
--- 5b. CHAT_MSG_SYSTEM (off-spec /roll capture during bidding)
+-- 5b. CHAT_MSG_SYSTEM (off-spec /roll 69  capture during bidding)
 ---------------------------------------------------------
 if event == "CHAT_MSG_SYSTEM" then
     RedGuild_Auction_OnSystemMessage(arg1)
@@ -7048,14 +7048,14 @@ end
 -- current DKP where they can bid, roll off-spec, or pass.
 -- Players without the addon can whisper the auctioneer:
 --     !bid 50        place a main-spec bid of 50
---     !os            declare off-spec, then /roll (flat 5 DKP if won)
+--     !os            declare off-spec, then /roll 69 (flat 5 DKP if won)
 --     !pass          pass on the item
 --     !dkp           check balance
 -- The editor sees every bid and awards the item MANUALLY.
 --==================================================================
 
 local AUCTION_DEFAULT_DURATION = 30
--- Flat price of an off-spec win. Off spec is decided by /roll, but
+-- Flat price of an off-spec win. Off spec is decided by /roll 69, but
 -- the winner always pays this fixed amount. Change this one number
 -- if the guild ever changes the rule.
 local AUCTION_OS_COST          = 5
@@ -7237,7 +7237,7 @@ function RedGuild_Auction_RecordBid(player, amount, mode, src, roll)
     mode   = mode or "MS"
     amount = tonumber(amount) or 0
 
-    -- Off spec is decided purely by /roll, never by bidding, but it
+    -- Off spec is decided purely by /roll 69, never by bidding, but it
     -- carries a fixed price. Passes carry nothing.
     if mode == "OS"   then amount = AUCTION_OS_COST end
     if mode == "PASS" then amount = 0 end
@@ -7602,7 +7602,7 @@ function RedGuild_Auction_SendBid(amount, mode)
         -- A real Blizzard roll so the whole raid can see it and the
         -- auctioneer can verify it. The system message is picked up
         -- on the editor's client and attached to this bid.
-        RandomRoll(1, 100)
+        RandomRoll(1, 69)
         AuctionPrint(string.format(
             "Off spec roll sent. Costs %d DKP if you win it.", AUCTION_OS_COST))
     elseif mode == "PASS" then
@@ -7819,8 +7819,8 @@ function RedGuild_Auction_OnSystemMessage(text)
 
     local who, roll, low, high = text:match(RedGuild_RollPattern)
     if not who or not roll then return end
-    if tonumber(low) ~= 1 or tonumber(high) ~= 100 then
-        AuctionWhisper(who, "RedGuild: only /roll (1-100) counts. Please roll again.")
+    if tonumber(low) ~= 1 or tonumber(high) ~= 69 then
+        AuctionWhisper(who, "RedGuild: only /roll 69 (1-69) counts. Please roll again.")
         return
     end
 
