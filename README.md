@@ -11,9 +11,10 @@ Required urgently:
 * Warnings on functions that change dkp table version to advise editor they aren't the highest version (also requires finishing the editors tab version sync/check code)
 * Out of guild users?  (specifically being able to add them to dkp table)
 * Attendance counter / Last raid (functionality linked to start new DKP week and attend/bench)  Note - will require a dummy date to be added for rows unlikely to ever update
-* Late bids on DKP auction (with flag to show bid was late)
-* Offspec rolls button to /roll 69
-* Forcesync before/after an auction
+* (Auc) Late bids on DKP auction (with flag to show bid was late)
+* (Auc) Offspec rolls button to /roll 69
+* (Auc) Forcesync before/after an auction
+* (Auc) Some functionality for ML bids?  (currently accepts chat bids)
   
 Features to deliver ASAP:
 * Redo the way DKP table saves to a single button commit (hook into editor rollback funcitonality)
@@ -23,7 +24,7 @@ Features to deliver ASAP:
 * Show only online filter option on the alt tracker
 * End of raid reminder to sync (may not be needed if the auction forcesync is added)
 * DKP Row archive (for users away for a long period)
-* Reopen bid window option (user)?
+* (Auc) Reopen bid window option (user)?
 * Full code rebuilt (claude)
 * Conversion to multi lua file version
   
@@ -34,8 +35,8 @@ Outstanding bugs:
 * Request sync doesn't work (check who it choses it from too and when the editors version codes fixed it should pick the highest version)
 * Editors decline force sync not showing/working?
 * Version control on editors tab isn't right and we need that functionality to fix/improve lots of other things
-* Multiple rolls are recorded during auctions, needs to just be first and warn user it has only accepted the first roll
-* Item swapping during bids doesn't start a new bid (confirmation box to stop accidental ones whilst bidding is ongoing)
+* (Auc) Multiple rolls are recorded during auctions, needs to just be first and warn user it has only accepted the first roll
+* (Auc) Item swapping during bids doesn't start a new bid (confirmation box to stop accidental ones whilst bidding is ongoing)
 
 Ideas for future releases (significant work):
 * Colour coding in the logs to make them easier to read (and full redesign of log tab tbh)
@@ -43,8 +44,19 @@ Ideas for future releases (significant work):
 * Raid group planner
 * Tactics
 * are you back check?
-* Records last offspec roll (should be first only)
 
+
+
+
+-------------------------------------------------------
+
+1.18.69 Changelog
+-------------------------------------------------------
+Added features:
+* DKP Bidding system added
+  
+Bugs squashed:
+*  
 
 
 -------------------------------------------------------
