@@ -58,26 +58,6 @@ Added features:
 * New runtime-only RedGuild_Auction table (deliberately not a saved variable — an auction never survives /reload or a disconnect).
 * New addon-message types: BID_START, BID_PLACE, BID_PAUSE, BID_RESUME, BID_STOP, BID_REOPEN, BID_CANCEL, BID_AWARD. BID_PLACE is routed as a whisper from bidder to auctioneer; every other BID_* message goes to RAID/PARTY. Bidding traffic is explicitly exempted from the "hide me from sync" opt-out, same as alt-tracker traffic.
 * New CHAT_MSG_SYSTEM event registration, needed to capture /roll results for off-spec bids.
-  
--------------------------------------------------------
-
-1.18.69 Changelog
--------------------------------------------------------
-Added features:
-* DKP Bidding system added
-  
-Bugs squashed:
-*  
-
--------------------------------------------------------
-
-1.18.69 Changelog
--------------------------------------------------------
-Added features:
-* DKP Bidding system added
-  
-Bugs squashed:
-*  
 
 
 -------------------------------------------------------
