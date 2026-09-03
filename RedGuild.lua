@@ -7065,10 +7065,6 @@ end
 --==================================================================
 
 local AUCTION_DEFAULT_DURATION = 30
--- Flat price of an off-spec win. Off spec is decided by the roll, but
--- the winner always pays this fixed amount. Change this one number
--- if the guild ever changes the rule.
-local AUCTION_OS_COST          = 5
 -- Smallest main-spec bid the addon will accept.
 local AUCTION_MIN_BID          = 10
 local AUCTION_MAX_ROWS         = 60
@@ -7374,10 +7370,9 @@ function RedGuild_Auction_RecordBid(player, amount, mode, src, roll)
     mode   = mode or "MS"
     amount = tonumber(amount) or 0
 
-    -- Off spec is decided purely by the roll, never by bidding, but it
-    -- carries a fixed price. Passes carry nothing.
-    if mode == "OS"   then amount = AUCTION_OS_COST end
-    if mode == "PASS" then amount = 0 end
+    -- Off spec is decided purely by the roll and costs nothing, so
+    -- neither off spec nor a pass ever carries a DKP amount.
+    if mode ~= "MS" then amount = 0 end
 
     if mode == "MS" then
         if amount < AUCTION_MIN_BID then
@@ -7512,13 +7507,18 @@ function RedGuild_Auction_Start()
     AuctionWarn(string.format(
         "Bidding OPEN on %s - %d seconds.", RedGuild_Auction.itemLink, dur))
     AuctionWarn(string.format(
-        "MAIN SPEC: bid DKP, minimum %d.   OFF SPEC: /roll 69 only, flat %d DKP if you win.",
-        AUCTION_MIN_BID, AUCTION_OS_COST))
+        "MAIN SPEC: bid DKP, minimum %d.   OFF SPEC: /roll 69 only, costs no DKP.",
+        AUCTION_MIN_BID))
     AuctionAnnounce(string.format(
         "No addon? Whisper %s:  !bid <amount>  for main spec,  or just /roll 69 for off spec.  !pass to skip.",
         RedGuild_Auction.ml))
 
     RedGuild_Auction_PushSync("auction start")
+
+    -- The auctioneer never receives their own BID_START, so open the
+    -- prompt for them directly. They bid on the same terms as anyone
+    -- else, including the minimum and their own balance.
+    RedGuild_Auction_ShowPrompt()
 
     if RedGuild_Auction.ticker then RedGuild_Auction.ticker:Cancel() end
     RedGuild_Auction.ticker = C_Timer.NewTicker(1, function()
@@ -7627,6 +7627,7 @@ function RedGuild_Auction_Stop(auto)
 
     RedGuild_Auction_RefreshMaster()
     if auctionPrompt then auctionPrompt:Hide() end
+    StaticPopup_Hide("REDGUILD_BID_CONFIRM_PASS")
 end
 
 function RedGuild_Auction_Cancel()
@@ -7653,6 +7654,7 @@ function RedGuild_Auction_Cancel()
 
     RedGuild_Auction_RefreshMaster()
     if auctionPrompt then auctionPrompt:Hide() end
+    StaticPopup_Hide("REDGUILD_BID_CONFIRM_PASS")
 end
 
 -- Manual award. Nothing here picks a winner automatically.
@@ -7710,10 +7712,10 @@ function RedGuild_Auction_Award(winner, cost)
     if mode == "OS" then
         if roll then
             AuctionWarn(string.format(
-                "%s awarded to %s on an off-spec roll of %d for %d DKP.", link, winner, roll, cost))
+                "%s awarded to %s on an off-spec roll of %d. No DKP charged.", link, winner, roll))
         else
             AuctionWarn(string.format(
-                "%s awarded to %s for off spec for %d DKP.", link, winner, cost))
+                "%s awarded to %s for off spec. No DKP charged.", link, winner))
         end
     elseif cost > 0 then
         AuctionWarn(string.format("%s awarded to %s for %d DKP (main spec).", link, winner, cost))
@@ -7732,6 +7734,7 @@ function RedGuild_Auction_Award(winner, cost)
 
     RedGuild_Auction_RefreshMaster()
     if auctionPrompt then auctionPrompt:Hide() end
+    StaticPopup_Hide("REDGUILD_BID_CONFIRM_PASS")
 
     AuctionPrint(string.format(
         "Awarded %s to %s for %d DKP. Remember to broadcast/sync so everyone gets the new balances.",
@@ -7754,8 +7757,7 @@ function RedGuild_Auction_SendBid(amount, mode)
 
     mode   = mode or "MS"
     amount = tonumber(amount) or 0
-    if mode == "OS"   then amount = AUCTION_OS_COST end
-    if mode == "PASS" then amount = 0 end
+    if mode ~= "MS" then amount = 0 end
 
     local bal = RedGuild_Auction_GetBalance(UnitName("player"))
 
@@ -7772,11 +7774,22 @@ function RedGuild_Auction_SendBid(amount, mode)
         end
     end
 
-    RedGuild_Send("BID_PLACE", EncodePayload({
-        id     = RedGuild_Auction.id,
-        amount = amount,
-        mode   = mode,
-    }), RedGuild_Auction.ml)
+    if RedGuild_Auction_IsAuctioneer() then
+        -- Addon messages whispered to yourself are dropped by the
+        -- inbound handler, so write straight into the book instead.
+        local good, err = RedGuild_Auction_RecordBid(
+            UnitName("player"), amount, mode, "addon")
+        if not good then
+            AuctionPrint(err or "Bid rejected.")
+            return
+        end
+    else
+        RedGuild_Send("BID_PLACE", EncodePayload({
+            id     = RedGuild_Auction.id,
+            amount = amount,
+            mode   = mode,
+        }), RedGuild_Auction.ml)
+    end
 
     -- Kept so this client can write its own entry in the Bid Log
     -- when the award is announced.
@@ -7792,8 +7805,7 @@ function RedGuild_Auction_SendBid(amount, mode)
         -- auctioneer can verify it. The system message is picked up
         -- on the editor's client and attached to this bid.
         RandomRoll(1, 69)
-        AuctionPrint(string.format(
-            "Off spec roll sent. Costs %d DKP if you win it.", AUCTION_OS_COST))
+        AuctionPrint("Off spec roll sent. It costs no DKP if you win it.")
     elseif mode == "PASS" then
         AuctionPrint("You passed.")
     else
@@ -7801,6 +7813,7 @@ function RedGuild_Auction_SendBid(amount, mode)
     end
 
     if auctionPrompt then auctionPrompt:Hide() end
+    StaticPopup_Hide("REDGUILD_BID_CONFIRM_PASS")
 end
 
 --------------------------------------------------
@@ -7870,6 +7883,7 @@ function RedGuild_Auction_OnAddonMessage(msgType, payload, sender)
         if data.id ~= RedGuild_Auction.id then return end
         RedGuild_Auction.open = false
         if auctionPrompt then auctionPrompt:Hide() end
+        StaticPopup_Hide("REDGUILD_BID_CONFIRM_PASS")
         return
     end
 
@@ -7881,6 +7895,7 @@ function RedGuild_Auction_OnAddonMessage(msgType, payload, sender)
         RedGuild_Auction.posted = false
         AuctionResetBook()
         if auctionPrompt then auctionPrompt:Hide() end
+        StaticPopup_Hide("REDGUILD_BID_CONFIRM_PASS")
         return
     end
 
@@ -7894,6 +7909,7 @@ function RedGuild_Auction_OnAddonMessage(msgType, payload, sender)
         RedGuild_Auction.posted = false
         AuctionResetBook()
         if auctionPrompt then auctionPrompt:Hide() end
+        StaticPopup_Hide("REDGUILD_BID_CONFIRM_PASS")
 
         -- Non-editors update their own copy so their displayed balance
         -- is right immediately instead of waiting for the next sync.
@@ -7961,9 +7977,8 @@ function RedGuild_Auction_OnWhisper(text, sender)
     ----------------------------------------------------------------
     if lower == "!os" then
         RedGuild_Auction_RecordBid(sender, 0, "OS", "whisper")
-        AuctionWhisper(sender, string.format(
-            "RedGuild: off spec noted, flat %d DKP if you win it. Now /roll 69 and I will pick it up.",
-            AUCTION_OS_COST))
+        AuctionWhisper(sender,
+            "RedGuild: off spec noted, it costs no DKP. Now /roll 69 and I will pick it up.")
         return true
     end
 
@@ -7976,9 +7991,8 @@ function RedGuild_Auction_OnWhisper(text, sender)
         -- off-spec roll instead and explain the rule.
         if tail and (tail:find("os", 1, true) or tail:find("off", 1, true)) then
             RedGuild_Auction_RecordBid(sender, 0, "OS", "whisper")
-            AuctionWhisper(sender, string.format(
-                "RedGuild: off spec is roll only, you do not bid DKP for it. Noted as off spec at the flat %d DKP - now /roll 69.",
-                AUCTION_OS_COST))
+            AuctionWhisper(sender,
+                "RedGuild: off spec is roll only and costs no DKP. Noted as off spec - now /roll 69.")
             return true
         end
 
@@ -7994,8 +8008,8 @@ function RedGuild_Auction_OnWhisper(text, sender)
 
     if lower:match("^!bid") then
         AuctionWhisper(sender, string.format(
-            "RedGuild: use  !bid <amount>  for main spec, minimum %d, for example  !bid 50. Off spec is /roll 69 only, flat %d DKP.",
-            AUCTION_MIN_BID, AUCTION_OS_COST))
+            "RedGuild: use  !bid <amount>  for main spec, minimum %d, for example  !bid 50. Off spec is /roll 69 only and costs no DKP.",
+            AUCTION_MIN_BID))
         return true
     end
 
@@ -8054,11 +8068,36 @@ end
 -- BIDDER PROMPT
 --------------------------------------------------
 
+local function BidItemName(link)
+    if not link then return "this item" end
+    return link:match("|h%[(.-)%]|h") or link
+end
+
+StaticPopupDialogs["REDGUILD_BID_CONFIRM_PASS"] = {
+    text = "Pass on %s?\n\nClosing the bidding window counts as a pass, and you will not be able to bid on it.",
+    button1 = "Pass",
+    button2 = "Keep bidding",
+    OnAccept = function()
+        RedGuild_Auction.passConfirm = nil
+        if RedGuild_Auction.open and not RedGuild_Auction.myBid then
+            RedGuild_Auction_SendBid(0, "PASS")
+        end
+    end,
+    OnCancel = function()
+        RedGuild_Auction.passConfirm = nil
+        -- Not a pass after all, so put the window back.
+        if RedGuild_Auction.open and not RedGuild_Auction.myBid then
+            RedGuild_Auction_ShowPrompt()
+        end
+    end,
+    timeout = 0, whileDead = true, hideOnEscape = false, preferredIndex = 3,
+}
+
 local function CreatePrompt()
     if auctionPrompt then return auctionPrompt end
 
     local f = CreateFrame("Frame", "RedGuildBidPrompt", UIParent, "BasicFrameTemplateWithInset")
-    f:SetSize(300, 210)
+    f:SetSize(300, 225)
     f:SetPoint("CENTER", UIParent, "CENTER", 0, 120)
     f:SetFrameStrata("DIALOG")
     f:SetMovable(true)
@@ -8109,9 +8148,10 @@ local function CreatePrompt()
     f.ruleText:SetPoint("TOPLEFT", bidLabel, "BOTTOMLEFT", 0, -14)
     f.ruleText:SetPoint("RIGHT", f, "RIGHT", -16, 0)
     f.ruleText:SetJustifyH("LEFT")
+    f.ruleText:SetWordWrap(true)
     f.ruleText:SetText(string.format(
-        "Minimum bid %d DKP. Off spec is a roll, not a bid - flat %d DKP if you win.",
-        AUCTION_MIN_BID, AUCTION_OS_COST))
+        "Minimum bid %d DKP. Off spec is a roll, not a bid, and costs no DKP.\nClosing this window or pressing Escape counts as a pass.",
+        AUCTION_MIN_BID))
 
     f.amountBox = CreateFrame("EditBox", nil, f, "InputBoxTemplate")
     f.amountBox:SetSize(70, 20)
@@ -8124,28 +8164,39 @@ local function CreatePrompt()
     end)
     f.amountBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
 
+    -- Bid sits far left and Roll OS far right, so the two cannot be
+    -- confused for one another under raid pressure.
     f.bidBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-    f.bidBtn:SetSize(80, 24)
+    f.bidBtn:SetSize(92, 24)
     f.bidBtn:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 16, 14)
-    f.bidBtn:SetText("Bid")
+    f.bidBtn:SetText("|TInterface\\Icons\\INV_Misc_Coin_01:14:14:0:0|t Bid")
     f.bidBtn:SetScript("OnClick", function()
         RedGuild_Auction_SendBid(f.amountBox:GetNumber(), "MS")
     end)
 
     f.osBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-    f.osBtn:SetSize(90, 24)
-    f.osBtn:SetPoint("LEFT", f.bidBtn, "RIGHT", 6, 0)
-    f.osBtn:SetText("Off spec /roll 69")
+    f.osBtn:SetSize(102, 24)
+    f.osBtn:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -16, 14)
+    f.osBtn:SetText("|TInterface\\Buttons\\UI-GroupLoot-Dice-Up:16:16:0:0|t Roll OS")
     f.osBtn:SetScript("OnClick", function()
         RedGuild_Auction_SendBid(0, "OS")
     end)
 
-    f.passBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-    f.passBtn:SetSize(70, 24)
-    f.passBtn:SetPoint("LEFT", f.osBtn, "RIGHT", 6, 0)
-    f.passBtn:SetText("Pass")
-    f.passBtn:SetScript("OnClick", function()
-        RedGuild_Auction_SendBid(0, "PASS")
+    -- There is no Pass button. Dismissing the window is the pass, so
+    -- the close box and Escape both go through here. Every deliberate
+    -- hide from the addon happens after the auction is closed or after
+    -- a bid was recorded, and both are covered by the guards below, so
+    -- only a genuine dismissal reaches SendBid.
+    f:SetScript("OnHide", function()
+        if not RedGuild_Auction.open then return end
+        if RedGuild_Auction.myBid then return end
+        if RedGuild_Auction.passConfirm then return end
+
+        -- Escape is easy to hit by reflex while clearing other UI, so
+        -- ask before turning that into a pass that cannot be undone.
+        RedGuild_Auction.passConfirm = true
+        StaticPopup_Show("REDGUILD_BID_CONFIRM_PASS",
+            BidItemName(RedGuild_Auction.itemLink))
     end)
 
     f:SetScript("OnUpdate", function(self, elapsed)
@@ -8174,6 +8225,10 @@ end
 
 function RedGuild_Auction_ShowPrompt()
     if not RedGuild_Auction.posted then return end
+
+    -- A confirmation left over from a previous item must not suppress
+    -- the next one, or a later Escape would silently do nothing.
+    RedGuild_Auction.passConfirm = nil
 
     local f = CreatePrompt()
     local bal = RedGuild_Auction_GetBalance(UnitName("player"))
@@ -8413,9 +8468,8 @@ local function CreateMaster()
 
     f.hintText = f:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     f.hintText:SetPoint("BOTTOMLEFT", costLabel, "TOPLEFT", 0, 4)
-    f.hintText:SetText(string.format(
-        "Off spec = roll, flat %d DKP. Winner is never picked automatically: click a row, check the cost, award.",
-        AUCTION_OS_COST))
+    f.hintText:SetText(
+        "Off spec = roll, no DKP. Winner is never picked automatically: click a row, check the cost, award.")
 
     auctionMaster = f
     return f
@@ -8469,11 +8523,11 @@ function RedGuild_Auction_RefreshMaster()
 
         row.nameText:SetText(ClassColour(b.name) .. b.name .. "|r")
 
-        if b.mode == "PASS" then
-            row.bidText:SetText("|cff888888-|r")
-        else
-            -- Main spec shows the bid, off spec shows the flat cost.
+        if b.mode == "MS" then
             row.bidText:SetText(tostring(b.amount or 0))
+        else
+            -- Off spec and passes cost nothing, so there is no figure.
+            row.bidText:SetText("|cff888888-|r")
         end
 
         local modeColour = "|cffffffff"
@@ -8484,7 +8538,7 @@ function RedGuild_Auction_RefreshMaster()
         -- Balance is looked up live from the editor's own table, not
         -- from whatever the bidder claimed.
         local bal = RedGuild_Auction_GetBalance(b.name)
-        if b.mode ~= "PASS" and (b.amount or 0) > bal then
+        if b.mode == "MS" and (b.amount or 0) > bal then
             row.balText:SetText("|cffff0000" .. bal .. "|r")
         else
             row.balText:SetText(tostring(bal))
@@ -8514,7 +8568,7 @@ function RedGuild_Auction_RefreshMaster()
     if RedGuild_Auction.selected then
         local b = RedGuild_Auction.bids[RedGuild_Auction.selected]
         if b and not f.costBox:HasFocus() then
-            -- Main spec suggests the bid, off spec the flat cost.
+            -- Main spec suggests the bid; off spec is always free.
             f.costBox:SetText(tostring(b.amount or 0))
         end
     end
