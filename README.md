@@ -18,3 +18,4 @@ Outstanding bugs:
 * (Auc) Multiple rolls are recorded during auctions, needs to just be first and warn user it has only accepted the first roll
 * (Auc) Item swapping during bids doesn't start a new bid (confirmation box to stop accidental ones whilst bidding is ongoing)
 * (Auc) 10 dkp min needs added
+* (Auc) Sometimes shows dkp wrong in window if opened too fast
