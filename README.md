@@ -46,6 +46,28 @@ Ideas for future releases (significant work):
 * Tactics
 * are you back check?
 
+-------------------------------------------------------
+
+2.0.69 Changelog
+-------------------------------------------------------
+Added features:
+* New Bid Log tab (TAB_BIDLOG), inserted between "Master Looter" and "RL Tools", showing history of past auctions: When, Item, Awarded to, Cost, Type, Bids — capped at 250 entries (AUCTION_LOG_MAX), newest first.
+* New auctioneer "Master" window with a live bid list and an "Award to selected" control.
+* New bid-prompt window for bidders with a live countdown timer (turns red under 5s, shows "PAUSED" while paused).
+* New RedGuild_Config.bidLog saved variable (per-client log; editors log the full book, everyone else logs only what they personally saw/sent).
+* New runtime-only RedGuild_Auction table (deliberately not a saved variable — an auction never survives /reload or a disconnect).
+* New addon-message types: BID_START, BID_PLACE, BID_PAUSE, BID_RESUME, BID_STOP, BID_REOPEN, BID_CANCEL, BID_AWARD. BID_PLACE is routed as a whisper from bidder to auctioneer; every other BID_* message goes to RAID/PARTY. Bidding traffic is explicitly exempted from the "hide me from sync" opt-out, same as alt-tracker traffic.
+* New CHAT_MSG_SYSTEM event registration, needed to capture /roll results for off-spec bids.
+  
+-------------------------------------------------------
+
+1.18.69 Changelog
+-------------------------------------------------------
+Added features:
+* DKP Bidding system added
+  
+Bugs squashed:
+*  
 
 -------------------------------------------------------
 
