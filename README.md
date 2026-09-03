@@ -7,6 +7,7 @@ Required urgently:
 * (Auc) Offspec rolls button to /roll 69
 * (Auc) Forcesync before/after an auction
 * (Auc) Some functionality for ML bids?  (currently accepts chat bids)
+* (Auc) Bid open and countdown on RW, rest in chat
   
 Features to deliver ASAP:
 * (Auc) Reopen bid window option (user)?
