@@ -80,6 +80,14 @@ REDGUILD_Inbound = REDGUILD_Inbound or {
 	ALTS       = {},
 }
 
+-- Payloads that already assembled, keyed the same way as the buckets.
+-- A re-sent part can outrun its own repair request and arrive after the
+-- payload was completed; without this it would open a brand new bucket
+-- holding one chunk, which later times out and cries "incomplete sync"
+-- about data the client already has.
+REDGUILD_InboundDone = REDGUILD_InboundDone or {}
+REDGUILD_DONE_TTL    = 120
+
 
 --------------------------------------------------
 -- DEBUGGING
@@ -375,9 +383,101 @@ local function RedGuild_ShowForceSyncSummary()
     Print("  Declined (editors): " .. join(s.declinedEditors))
 end
 
+--------------------------------------------------
+-- Outbound chunk pacing and re-send cache
+--------------------------------------------------
+-- A DKP table is dozens of addon messages. Firing them in a tight
+-- loop is what makes parts go missing: the server side addon message
+-- throttle silently drops whatever overflows the burst allowance, and
+-- the receiver is left holding half a payload. So every chunk now
+-- goes through one paced queue, shared by all senders in this client
+-- (manual sync, editor list, auction push), and each send is kept for
+-- a while so a receiver can ask for the parts it never got.
+REDGUILD_CHUNK_DELAY     = 0.15   -- seconds between outbound chunks
+REDGUILD_OUT_CACHE_MAX   = 10     -- payloads kept for re-sending
+REDGUILD_OUT_CACHE_TTL   = 300    -- seconds a cached payload lives
+
+RedGuild_OutboundCache = RedGuild_OutboundCache or {}
+RedGuild_OutboundQueue = RedGuild_OutboundQueue or {}
+RedGuild_OutboundBusy  = false
+
+local function RedGuild_OutboundPump()
+    local item = table.remove(RedGuild_OutboundQueue, 1)
+    if not item then
+        RedGuild_OutboundBusy = false
+        return
+    end
+
+    C_ChatInfo.SendAddonMessage(
+        REDGUILD_CHAT_PREFIX, item.msg, item.channel, item.target)
+
+    C_Timer.After(REDGUILD_CHUNK_DELAY, RedGuild_OutboundPump)
+end
+
+function RedGuild_QueueChunk(msg, channel, target)
+    table.insert(RedGuild_OutboundQueue,
+        { msg = msg, channel = channel, target = target })
+
+    if RedGuild_OutboundBusy then return end
+    RedGuild_OutboundBusy = true
+    C_Timer.After(0, RedGuild_OutboundPump)
+end
+
+-- Runs fn once everything queued so far has actually gone out, so a
+-- small announcement can be made to arrive *after* a big paced payload
+-- instead of overtaking it. Falls through immediately when there is
+-- nothing in flight, and gives up after timeout so a stuck queue can
+-- never wedge the caller.
+function RedGuild_AfterOutbound(timeout, fn)
+    local deadline = GetTime() + (tonumber(timeout) or 10)
+
+    local function check()
+        if (#RedGuild_OutboundQueue == 0 and not RedGuild_OutboundBusy)
+           or GetTime() >= deadline
+        then
+            fn()
+            return
+        end
+        C_Timer.After(0.1, check)
+    end
+
+    check()
+end
+
+function RedGuild_BuildChunkMsg(msgType, seq, part, total, chunk)
+    return string.format("%s:%s:%d:%d:%d:%s",
+        REDGUILD_CHAT_PREFIX, msgType, seq, part, total, chunk)
+end
+
+-- Remembers the pieces of one push so missing parts can be re-sent
+-- without rebuilding (and re-broadcasting) the whole table.
+function RedGuild_CacheOutbound(seq, msgType, chunks)
+    RedGuild_OutboundCache[seq] = {
+        msgType = msgType,
+        chunks  = chunks,
+        total   = #chunks,
+        t       = GetTime(),
+    }
+
+    local now, keys = GetTime(), {}
+    for k, v in pairs(RedGuild_OutboundCache) do
+        if (now - (v.t or 0)) > REDGUILD_OUT_CACHE_TTL then
+            RedGuild_OutboundCache[k] = nil
+        else
+            table.insert(keys, k)
+        end
+    end
+
+    -- Sequence numbers only ever grow, so the lowest keys are oldest.
+    table.sort(keys)
+    for i = 1, #keys - REDGUILD_OUT_CACHE_MAX do
+        RedGuild_OutboundCache[keys[i]] = nil
+    end
+end
+
 local function RedGuild_GetSyncChannel(msgType, target)
     -- Live bidding traffic: bidder -> auctioneer
-    if msgType == "BID_PLACE" then
+    if msgType == "BID_PLACE" or msgType == "BID_SYNCREQ" then
         if not target or target == "" then return nil, nil end
         return "WHISPER", GetExactName(target)
     end
@@ -392,6 +492,7 @@ local function RedGuild_GetSyncChannel(msgType, target)
     -- Small whisper responses
     if msgType == "FORCE_ACCEPT"
         or msgType == "FORCE_DECLINE"
+        or msgType == "RESEND"
     then
         if not target then return nil, nil end
         return "WHISPER", GetExactName(target)
@@ -414,8 +515,12 @@ function RedGuild_Send(msgType, payload, target)
 	
 -- DKP sync opt-out should NOT block Alt Tracker sync
 if RedGuild_Config.hideMeFromSync then
+    -- RESEND only asks for parts of a payload this client was already
+    -- sent, so opting out of broadcasting must not leave it stuck with
+    -- a half-received table.
     if msgType ~= "ALTS_REQ" and
        msgType ~= "ALTS_DATA" and
+       msgType ~= "RESEND" and
        msgType:sub(1, 4) ~= "BID_" and
        msgType ~= "ALTS_UPDATE" then
         return
@@ -460,16 +565,18 @@ end
     local total = math.ceil(#payload / REDGUILD_MAX_CHUNK)
     if total == 0 then total = 1 end
 
+    local chunks = {}
     for i = 1, total do
         local startIdx = (i - 1) * REDGUILD_MAX_CHUNK + 1
-        local chunk = payload:sub(startIdx, startIdx + REDGUILD_MAX_CHUNK - 1)
+        chunks[i] = payload:sub(startIdx, startIdx + REDGUILD_MAX_CHUNK - 1)
+    end
 
-        local msg = string.format(
-            "%s:%s:%d:%d:%d:%s",
-            REDGUILD_CHAT_PREFIX, msgType, seq, i, total, chunk
-        )
+    RedGuild_CacheOutbound(seq, msgType, chunks)
 
-        C_ChatInfo.SendAddonMessage(REDGUILD_CHAT_PREFIX, msg, channel, actualTarget)
+    for i = 1, total do
+        RedGuild_QueueChunk(
+            RedGuild_BuildChunkMsg(msgType, seq, i, total, chunks[i]),
+            channel, actualTarget)
     end
 end
 
@@ -749,6 +856,154 @@ end
 local function SafeSetSyncWarning(text)
     if syncWarning then
         syncWarning:SetText(text or "")
+    end
+end
+
+--------------------------------------------------
+-- Inbound chunk buffer maintenance
+--------------------------------------------------
+-- A chunked sync (DATA / FORCE_REQ / EDITORSYNC / ALTS) is only
+-- applied once every part has arrived. If a part is lost - a
+-- loading screen mid raid, a server side addon message drop - the
+-- half filled bucket used to sit here untouched forever, so the
+-- client stayed silently out of date until someone ran a full
+-- force sync. Buckets now carry a timestamp and are swept, and the
+-- user is told instead of being left to guess.
+REDGUILD_CHUNK_TIMEOUT = 60   -- seconds before a bucket is given up on
+
+-- Before giving up, ask the sender for the parts that never arrived.
+-- A dropped chunk is nearly always a throttle casualty, so the payload
+-- is still sitting in the sender's cache and a targeted whisper gets it
+-- back in a second or two - no full table re-broadcast, no user action.
+REDGUILD_CHUNK_REPAIR_IDLE = 4    -- seconds of silence before asking
+REDGUILD_CHUNK_REPAIR_MAX  = 3    -- how many times to ask
+REDGUILD_AUTOREQ_COOLDOWN  = 300  -- seconds between automatic full syncs
+
+RedGuild_LastAutoRequest = 0
+
+function RedGuild_RepairInboundChunks()
+    local now = GetTime()
+
+    for chunkType, bucket in pairs(REDGUILD_Inbound or {}) do
+        for _, entry in pairs(bucket) do
+            if type(entry) == "table" and entry.total and entry.from and entry.seq then
+                local idle       = now - (entry.t or now)
+                local sinceAsked = now - (entry.lastRepair or 0)
+
+                if idle >= REDGUILD_CHUNK_REPAIR_IDLE
+                   and sinceAsked >= REDGUILD_CHUNK_REPAIR_IDLE
+                   and (entry.repairs or 0) < REDGUILD_CHUNK_REPAIR_MAX
+                then
+                    local missing = {}
+                    for i = 1, entry.total do
+                        -- One request has to fit in one addon message,
+                        -- so ask for a batch and let the next pass take
+                        -- the rest if a payload lost a lot of parts.
+                        if not entry.parts[i] and #missing < 40 then
+                            table.insert(missing, i)
+                        end
+                    end
+
+                    if #missing > 0 then
+                        entry.repairs    = (entry.repairs or 0) + 1
+                        entry.lastRepair = now
+
+                        D(string.format(
+                            "CHUNK REPAIR %s seq=%d - asking %s for %d missing part(s), try %d",
+                            tostring(chunkType), entry.seq, tostring(entry.from),
+                            #missing, entry.repairs))
+
+                        RedGuild_Send("RESEND", string.format(
+                            "%d|%s", entry.seq, table.concat(missing, ",")),
+                            entry.from)
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- Last resort once the repair whispers went unanswered: ask for a
+-- fresh sync instead of leaving the player to notice a chat line and
+-- press a button. Jittered and rate limited, because a raid-wide
+-- hiccup would otherwise have everyone request at the same instant.
+function RedGuild_AutoRequestSync()
+    local now = GetTime()
+    if (now - (RedGuild_LastAutoRequest or 0)) < REDGUILD_AUTOREQ_COOLDOWN then
+        return false
+    end
+    if not IsInGuild() or GetNumGuildMembers() == 0 then return false end
+    if RedGuild_SyncLocked then return false end
+
+    RedGuild_LastAutoRequest = now
+
+    C_Timer.After(2 + math.random() * 8, function()
+        local me = Ambiguate(UnitName("player"), "short")
+        if me and me ~= "" then
+            D("AUTO SYNC REQUEST after failed chunk repair")
+            RedGuild_Send("REQUEST", me)
+        end
+    end)
+
+    return true
+end
+
+function RedGuild_SweepInboundChunks()
+    local now = GetTime()
+    local dropped, lastFrom = 0, nil
+
+    for chunkType, bucket in pairs(REDGUILD_Inbound or {}) do
+        for bucketKey, entry in pairs(bucket) do
+            if type(entry) == "table" then
+                -- buckets created before this fix have no timestamp
+                if not entry.t then entry.t = now end
+
+                if (now - entry.t) > REDGUILD_CHUNK_TIMEOUT then
+                    local total = tonumber(entry.total) or 0
+                    local have  = 0
+                    for i = 1, total do
+                        if entry.parts and entry.parts[i] then
+                            have = have + 1
+                        end
+                    end
+
+                    D(string.format(
+                        "CHUNK TIMEOUT %s from %s - %d/%d parts after %d repair attempt(s), discarded",
+                        tostring(chunkType), tostring(entry.from), have, total,
+                        entry.repairs or 0))
+
+                    bucket[bucketKey] = nil
+                    dropped  = dropped + 1
+                    lastFrom = entry.from or lastFrom
+                end
+            end
+        end
+    end
+
+    if dropped > 0 then
+        -- Only reaches here after the repair whispers were ignored or
+        -- the sender went offline, so retrying by hand is pointless
+        -- until something changes - fetch a fresh copy instead.
+        local requested = RedGuild_AutoRequestSync()
+
+        if requested then
+            SafeSetSyncWarning(string.format(
+                "Incomplete sync from %s - requesting a fresh sync.",
+                tostring(lastFrom)))
+            Print(string.format(
+                "|cffff8800Incomplete sync|r from %s - %d transfer%s could not be "
+                .. "repaired. Requesting a fresh sync automatically; no action needed.",
+                tostring(lastFrom), dropped, dropped == 1 and "" or "s"))
+        else
+            SafeSetSyncWarning(string.format(
+                "Incomplete sync from %s - press Request SYNC.",
+                tostring(lastFrom)))
+            Print(string.format(
+                "|cffff8800Incomplete sync|r from %s - %d transfer%s lost parts and "
+                .. "were discarded. Your DKP table may be out of date; press "
+                .. "Request SYNC on the DKP tab.",
+                tostring(lastFrom), dropped, dropped == 1 and "" or "s"))
+        end
     end
 end
 
@@ -5760,12 +6015,6 @@ local function ApplySyncData(sender, encoded)
     if not sender or sender == "" then return end
     if sender == UnitName("player") then return end
 	
-	-- Editors must NEVER accept normal DATA syncs
-	if IsEditor(UnitName("player")) then
-		SafeSetSyncWarning("Ignored DKP sync — editors only accept FORCE_REQ.")
-		return
-	end
-
     if RedGuild_SyncLocked then
         SafeSetSyncWarning("Sync received during startup — ignored.")
         return
@@ -5791,11 +6040,22 @@ local function ApplySyncData(sender, encoded)
 	local incoming = tonumber(payload.dkpVersion or 0)
 	local localVer = tonumber(RedGuild_Config.dkpVersion or 0)
 
-	if not IsEditor(UnitName("player")) then
-		if incoming <= localVer then
-			SafeSetSyncWarning("DKP sync not required.")
-			return
-		end
+	-- Editors must NEVER accept ordinary DATA syncs: their own table is
+	-- the authority and a stray broadcast could undo their edits.
+	-- The push that opens bidding is the one exception. Everyone has to
+	-- be bidding against the same numbers, and an editor sitting on a
+	-- stale table sees wrong balances in the auction window just like
+	-- anyone else. It is still gated on the version below, so an editor
+	-- who is AHEAD keeps what they have - only a genuinely newer table
+	-- is taken.
+	if IsEditor(UnitName("player")) and not payload.auctionSync then
+		SafeSetSyncWarning("Ignored DKP sync — editors only accept FORCE_REQ.")
+		return
+	end
+
+	if incoming <= localVer then
+		SafeSetSyncWarning("DKP sync not required.")
+		return
 	end
 	
 	RedGuild_Config.dkpVersion = incoming
@@ -6520,6 +6780,10 @@ if event == "PLAYER_LOGIN" then
 		end	
 	end)
 
+	-- Discard abandoned inbound chunk buffers (every 15 seconds)
+	C_Timer.NewTicker(15, RedGuild_SweepInboundChunks)
+	C_Timer.NewTicker(2,  RedGuild_RepairInboundChunks)
+
     return
 end
 
@@ -6599,8 +6863,33 @@ if event == "CHAT_MSG_ADDON" then
             chunkType, seq, part, total, sender, #chunk))
 
         local bucket = REDGUILD_Inbound[chunkType]
-        bucket[seq] = bucket[seq] or { parts = {}, total = total, from = sender }
-        local entry = bucket[seq]
+
+        -- One bucket per SENDER and sequence, not per sequence alone.
+        -- RedGuild_OutboundSeq restarts at 0 on every login, so two
+        -- editors pushing during the same raid both start at seq 1 and
+        -- used to interleave their chunks into a single bucket. The
+        -- bucket then hit its part count, was concatenated out of two
+        -- different payloads, and failed to decode - silently.
+        local bucketKey = tostring(sender) .. "\001" .. tostring(seq)
+
+        -- Already assembled and applied: nothing to do with stragglers.
+        local doneAt = REDGUILD_InboundDone[bucketKey]
+        if doneAt and (GetTime() - doneAt) < REDGUILD_DONE_TTL then
+            D("CHUNK IGNORED - " .. chunkType .. " seq " .. seq ..
+              " from " .. tostring(sender) .. " already complete")
+            return
+        end
+
+        local entry = bucket[bucketKey]
+
+        -- No bucket yet, or the sender restarted a push under the same
+        -- seq with a different size: start clean rather than mixing.
+        if not entry or entry.total ~= total then
+            entry = { parts = {}, total = total, from = sender, seq = seq }
+            bucket[bucketKey] = entry
+        end
+
+        entry.t = GetTime()   -- last activity, used by the sweep
         entry.parts[part] = chunk
 
         local complete = true
@@ -6613,8 +6902,25 @@ if event == "CHAT_MSG_ADDON" then
 
         if complete then
             D("CHUNK ASSEMBLY COMPLETE → " .. chunkType)
-            local full = table.concat(entry.parts, "")
-            bucket[seq] = nil
+
+            -- Built in index order rather than by concatenating the
+            -- table: repaired parts arrive out of order, and the order
+            -- of the payload is the payload.
+            local ordered = {}
+            for i = 1, entry.total do
+                ordered[i] = entry.parts[i]
+            end
+            local full = table.concat(ordered, "")
+
+            bucket[bucketKey] = nil
+
+            local now = GetTime()
+            REDGUILD_InboundDone[bucketKey] = now
+            for k, t in pairs(REDGUILD_InboundDone) do
+                if (now - t) > REDGUILD_DONE_TTL then
+                    REDGUILD_InboundDone[k] = nil
+                end
+            end
 
             -------------------------------------------------
             -- DATA SYNC
@@ -6788,6 +7094,39 @@ if event == "CHAT_MSG_ADDON" then
     -- BID_REOPEN / BID_CANCEL / BID_AWARD
     if simpleType:sub(1, 4) == "BID_" then
         RedGuild_Auction_OnAddonMessage(simpleType, simplePayload, sender)
+        return
+    end
+
+    -- RESEND: payload = "<seq>|<part>,<part>,..." - someone is missing
+    -- parts of a payload this client sent. Re-send just those parts,
+    -- whispered, instead of making the whole guild eat the table again.
+    if simpleType == "RESEND" then
+        local seqStr, partList = simplePayload:match("^(%d+)|(.*)$")
+        local seq   = tonumber(seqStr or "")
+        local entry = seq and RedGuild_OutboundCache[seq]
+
+        if not entry then
+            D("RESEND from " .. tostring(sender) ..
+              " - seq " .. tostring(seqStr) .. " no longer cached")
+            return
+        end
+
+        local sent = 0
+        for p in tostring(partList):gmatch("%d+") do
+            local idx = tonumber(p)
+            -- Capped so a malformed or hostile request cannot turn one
+            -- message into an unbounded flood of whispers.
+            if idx and entry.chunks[idx] and sent < 40 then
+                sent = sent + 1
+                RedGuild_QueueChunk(
+                    RedGuild_BuildChunkMsg(entry.msgType, seq, idx,
+                        entry.total, entry.chunks[idx]),
+                    "WHISPER", GetExactName(sender))
+            end
+        end
+
+        D(string.format("RESEND → %d part(s) of seq %d back to %s",
+            sent, seq, tostring(sender)))
         return
     end
 
@@ -7066,6 +7405,10 @@ end
 --==================================================================
 
 local AUCTION_DEFAULT_DURATION = 30
+-- Longest the auctioneer waits for the DKP push to clear the queue
+-- before opening bidding anyway. A raid should never be stuck staring
+-- at nothing because one payload is slow.
+AUCTION_SYNC_WAIT_MAX = 10
 -- Smallest main-spec bid the addon will accept.
 local AUCTION_MIN_BID          = 10
 local AUCTION_MAX_ROWS         = 60
@@ -7074,7 +7417,9 @@ local AUCTION_MAX_ROWS         = 60
 -- never survive a /reload or a disconnect.
 RedGuild_Auction = {
     open       = false,   -- accepting bids right now
+    preparing  = false,   -- syncing DKP, bidding opens once that is out
     posted     = false,   -- an item is posted (may be closed but not yet awarded)
+    dkpVersion = nil,     -- DKP version the auctioneer posted with
     id         = nil,
     itemLink   = nil,
     itemID     = nil,
@@ -7209,6 +7554,15 @@ function RedGuild_Auction_TimeLeft()
     return math.max(0, math.ceil((RedGuild_Auction.endTime or 0) - GetTime()))
 end
 
+-- The auctioneer stamps every BID_START with the DKP version it was
+-- posted under. Anything lower locally means the balance on screen is
+-- not the one being bid against yet.
+function RedGuild_Auction_DKPStale()
+    local want = tonumber(RedGuild_Auction.dkpVersion or 0) or 0
+    if want <= 0 then return false end
+    return (tonumber(RedGuild_Config.dkpVersion or 0) or 0) < want
+end
+
 function RedGuild_Auction_IsOpen()
     return RedGuild_Auction.open == true
 end
@@ -7269,40 +7623,81 @@ end
 -- would ask every guild member to accept an overwrite, which is far
 -- too heavy to fire once per item.
 -- The DKP table is far bigger than one addon message, so a push is
--- dozens of chunks. RedGuild_Send fires them in a tight loop, which is
--- fine for an occasional manual sync but risks tripping the server
--- addon-message throttle when it happens automatically on every item.
--- These pushes are background traffic, so space them out instead.
-local AUCTION_SYNC_CHUNK_DELAY = 0.15
-
+-- dozens of chunks. Everything now goes through the shared outbound
+-- queue, which paces the whole client rather than each sender on its
+-- own - two pushes overlapping used to interleave into one burst and
+-- trip the throttle anyway - and keeps the chunks for re-sending.
 local function AuctionSendThrottled(msgType, payload)
     RedGuild_OutboundSeq = RedGuild_OutboundSeq + 1
     local seq   = RedGuild_OutboundSeq
     local total = math.ceil(#payload / REDGUILD_MAX_CHUNK)
     if total == 0 then total = 1 end
 
+    local chunks = {}
     for i = 1, total do
         local startIdx = (i - 1) * REDGUILD_MAX_CHUNK + 1
-        local chunk    = payload:sub(startIdx, startIdx + REDGUILD_MAX_CHUNK - 1)
-        local msg      = string.format("%s:%s:%d:%d:%d:%s",
-            REDGUILD_CHAT_PREFIX, msgType, seq, i, total, chunk)
+        chunks[i] = payload:sub(startIdx, startIdx + REDGUILD_MAX_CHUNK - 1)
+    end
 
-        C_Timer.After((i - 1) * AUCTION_SYNC_CHUNK_DELAY, function()
-            C_ChatInfo.SendAddonMessage(REDGUILD_CHAT_PREFIX, msg, "GUILD")
-        end)
+    RedGuild_CacheOutbound(seq, msgType, chunks)
+
+    for i = 1, total do
+        RedGuild_QueueChunk(
+            RedGuild_BuildChunkMsg(msgType, seq, i, total, chunks[i]), "GUILD")
     end
 
     return total
 end
 
+-- Same payload as the broadcast, whispered to one player who asked for
+-- it. Used when somebody joins late or missed the push: re-broadcasting
+-- the whole table to the guild for one person is wasteful, and the
+-- version dedupe would refuse to do it anyway.
+function RedGuild_Auction_PushSyncTo(target)
+    if not IsAuthorized() then return false end
+    if RedGuild_Config.hideMeFromSync then return false end
+    if not target or target == "" then return false end
+
+    local payload = BuildSyncPayload()
+    payload.dkpVersion  = tonumber(RedGuild_Config.dkpVersion or 0)
+    payload.auctionSync = true
+
+    local encoded = EncodePayload(payload)
+
+    RedGuild_OutboundSeq = RedGuild_OutboundSeq + 1
+    local seq   = RedGuild_OutboundSeq
+    local total = math.ceil(#encoded / REDGUILD_MAX_CHUNK)
+    if total == 0 then total = 1 end
+
+    local chunks = {}
+    for i = 1, total do
+        local startIdx = (i - 1) * REDGUILD_MAX_CHUNK + 1
+        chunks[i] = encoded:sub(startIdx, startIdx + REDGUILD_MAX_CHUNK - 1)
+    end
+
+    RedGuild_CacheOutbound(seq, "DATA", chunks)
+
+    for i = 1, total do
+        RedGuild_QueueChunk(
+            RedGuild_BuildChunkMsg("DATA", seq, i, total, chunks[i]),
+            "WHISPER", GetExactName(target))
+    end
+
+    D(string.format("Auction sync whispered to %s in %d chunks",
+        tostring(target), total))
+    return true
+end
+
 local lastPushedVersion, lastPushTime = nil, 0
 
+-- Returns true when a push was actually put on the wire, so the
+-- caller knows whether there is anything to wait for.
 function RedGuild_Auction_PushSync(reason)
-    if not IsAuthorized() then return end
-    if RedGuild_SyncLocked then return end
+    if not IsAuthorized() then return false end
+    if RedGuild_SyncLocked then return false end
     if RedGuild_Config.hideMeFromSync then
         AuctionPrint("DKP not synced - 'Hide me from SYNC' is enabled.")
-        return
+        return false
     end
 
     -- Recipients discard a push whose dkpVersion is not ahead of
@@ -7311,7 +7706,7 @@ function RedGuild_Auction_PushSync(reason)
     local ver = tonumber(RedGuild_Config.dkpVersion or 0)
     if lastPushedVersion == ver and (GetTime() - lastPushTime) < 300 then
         D("Auction sync skipped - nothing changed since the last push")
-        return
+        return false
     end
     lastPushedVersion, lastPushTime = ver, GetTime()
 
@@ -7320,10 +7715,14 @@ function RedGuild_Auction_PushSync(reason)
     -- payload, so it has to be set here or every recipient will
     -- read version 0 and discard the update.
     payload.dkpVersion = tonumber(RedGuild_Config.dkpVersion or 0)
+    -- Tells the receiving editors this is the bidding sync, the one
+    -- kind of DATA they are allowed to apply.
+    payload.auctionSync = true
 
     local chunks = AuctionSendThrottled("DATA", EncodePayload(payload))
     D(string.format("Auction sync pushed (%s) in %d chunks",
         tostring(reason), chunks))
+    return true
 end
 
 local function AuctionResetBook()
@@ -7513,6 +7912,10 @@ function RedGuild_Auction_Start()
         AuctionPrint("Bidding is already open. Close it first.")
         return
     end
+    if RedGuild_Auction.preparing then
+        AuctionPrint("Bidding is already being prepared.")
+        return
+    end
 
     local dur = AUCTION_DEFAULT_DURATION
     if auctionMaster and auctionMaster.durBox then
@@ -7521,42 +7924,67 @@ function RedGuild_Auction_Start()
     if dur < 5   then dur = 5   end
     if dur > 300 then dur = 300 end
 
-    AuctionResetBook()
+    -- Everyone has to be looking at their real balance before the
+    -- prompt appears, so the DKP push goes first and BID_START waits
+    -- behind it in the same outbound queue. Sending the announcement
+    -- first (as this used to) meant the prompt opened while the table
+    -- was still streaming, and bidders saw an old balance - or had a
+    -- bid rejected against one.
+    RedGuild_Auction.preparing = true
+    local pushed = RedGuild_Auction_PushSync("auction start")
+    if pushed then
+        AuctionPrint("Syncing DKP - bidding opens once everyone has it.")
+    end
 
-    RedGuild_Auction.id       = tostring(time()) .. "-" .. math.random(1000, 9999)
-    RedGuild_Auction.ml       = Ambiguate(UnitName("player"), "short")
-    RedGuild_Auction.duration = dur
-    RedGuild_Auction.endTime  = GetTime() + dur
-    RedGuild_Auction.paused   = false
-    RedGuild_Auction.remaining = nil
-    RedGuild_Auction.myBid    = nil
-    RedGuild_Auction.open     = true
-    RedGuild_Auction.posted   = true
+    RedGuild_AfterOutbound(AUCTION_SYNC_WAIT_MAX, function()
+        -- Cancelled, or another auction claimed the slot, while the
+        -- table was going out.
+        if not RedGuild_Auction.preparing then
+            D("Auction start abandoned while syncing")
+            return
+        end
+        RedGuild_Auction.preparing = false
 
-    RedGuild_Send("BID_START", EncodePayload({
-        id       = RedGuild_Auction.id,
-        itemLink = RedGuild_Auction.itemLink,
-        itemID   = RedGuild_Auction.itemID,
-        ml       = RedGuild_Auction.ml,
-        duration = dur,
-    }))
+        AuctionResetBook()
 
-    AuctionWarn(string.format(
-        "Bidding OPEN on %s - %d seconds.", RedGuild_Auction.itemLink, dur))
-    AuctionAnnounce(string.format(
-        "No addon? Whisper %s:  !bid <amount>  for main spec,  or just /roll 69 for off spec.  !pass to skip.",
-        RedGuild_Auction.ml))
+        RedGuild_Auction.id       = tostring(time()) .. "-" .. math.random(1000, 9999)
+        RedGuild_Auction.ml       = Ambiguate(UnitName("player"), "short")
+        RedGuild_Auction.duration = dur
+        RedGuild_Auction.endTime  = GetTime() + dur
+        RedGuild_Auction.paused   = false
+        RedGuild_Auction.remaining = nil
+        RedGuild_Auction.myBid    = nil
+        RedGuild_Auction.open     = true
+        RedGuild_Auction.posted   = true
+        RedGuild_Auction.dkpVersion = tonumber(RedGuild_Config.dkpVersion or 0) or 0
+        RedGuild_Auction.syncReqs   = {}
 
-    RedGuild_Auction_PushSync("auction start")
+        RedGuild_Send("BID_START", EncodePayload({
+            id         = RedGuild_Auction.id,
+            itemLink   = RedGuild_Auction.itemLink,
+            itemID     = RedGuild_Auction.itemID,
+            ml         = RedGuild_Auction.ml,
+            duration   = dur,
+            -- Lets a client that still missed the push notice it is
+            -- behind instead of bidding against a stale number.
+            dkpVersion = RedGuild_Auction.dkpVersion,
+        }))
 
-    -- The auctioneer never receives their own BID_START, so open the
-    -- prompt for them directly. They bid on the same terms as anyone
-    -- else, including the minimum and their own balance.
-    RedGuild_Auction_ShowPrompt()
+        AuctionWarn(string.format(
+            "Bidding OPEN on %s - %d seconds.", RedGuild_Auction.itemLink, dur))
+        AuctionAnnounce(string.format(
+            "No addon? Whisper %s:  !bid <amount>  for main spec,  or just /roll 69 for off spec.  !pass to skip.",
+            RedGuild_Auction.ml))
 
-    AuctionStartTicker()
+        -- The auctioneer never receives their own BID_START, so open
+        -- the prompt for them directly. They bid on the same terms as
+        -- anyone else, including the minimum and their own balance.
+        RedGuild_Auction_ShowPrompt()
 
-    RedGuild_Auction_RefreshMaster()
+        AuctionStartTicker()
+
+        RedGuild_Auction_RefreshMaster()
+    end)
 end
 
 function RedGuild_Auction_Pause()
@@ -7704,6 +8132,8 @@ function RedGuild_Auction_Reopen()
 end
 
 function RedGuild_Auction_Cancel()
+    -- Also aborts a start that is still waiting for its DKP push.
+    RedGuild_Auction.preparing = false
     if not RedGuild_Auction.posted then return end
 
     if RedGuild_Auction_IsAuctioneer() then
@@ -7925,9 +8355,49 @@ function RedGuild_Auction_OnAddonMessage(msgType, payload, sender)
         RedGuild_Auction.myBid    = nil
         RedGuild_Auction.open     = true
         RedGuild_Auction.posted   = true
+        RedGuild_Auction.dkpVersion = tonumber(data.dkpVersion or 0) or 0
         AuctionResetBook()
 
         RedGuild_Auction_ShowPrompt()
+
+        -- Still behind the version this item was posted under: the
+        -- push was missed or is mid-repair. The prompt shows the
+        -- balance as syncing and corrects itself the moment the data
+        -- lands; if it has not landed shortly, ask for it.
+        if RedGuild_Auction_DKPStale() then
+            D("BID_START ahead of local DKP version - waiting on sync")
+            C_Timer.After(3, function()
+                if RedGuild_Auction_DKPStale() and RedGuild_Auction.posted then
+                    -- Straight to the auctioneer: a guild-wide REQUEST
+                    -- comes back as ordinary DATA, which this client
+                    -- would refuse if it is an editor.
+                    RedGuild_Send("BID_SYNCREQ", EncodePayload({
+                        id = RedGuild_Auction.id,
+                    }), RedGuild_Auction.ml)
+                end
+            end)
+        end
+        return
+    end
+
+    ----------------------------------------------------------------
+    if msgType == "BID_SYNCREQ" then
+        -- Somebody is bidding against a table older than the one this
+        -- item was posted under. Send them the current one directly.
+        if not RedGuild_Auction_IsAuctioneer() then return end
+        if data.id ~= RedGuild_Auction.id then return end
+        if not IsActiveGuildMember(sender) then return end
+
+        RedGuild_Auction.syncReqs = RedGuild_Auction.syncReqs or {}
+        local last = RedGuild_Auction.syncReqs[sender] or 0
+        if (GetTime() - last) < 30 then
+            D("BID_SYNCREQ from " .. sender .. " ignored - asked moments ago")
+            return
+        end
+        RedGuild_Auction.syncReqs[sender] = GetTime()
+
+        D("BID_SYNCREQ from " .. sender .. " - whispering the DKP table")
+        RedGuild_Auction_PushSyncTo(sender)
         return
     end
 
@@ -8228,7 +8698,7 @@ local function CreatePrompt()
     if auctionPrompt then return auctionPrompt end
 
     local f = CreateFrame("Frame", "RedGuildBidPrompt", UIParent, "BasicFrameTemplateWithInset")
-    f:SetSize(300, 225)
+    f:SetSize(300, 255)
     f:SetPoint("CENTER", UIParent, "CENTER", 0, 120)
     f:SetFrameStrata("DIALOG")
     f:SetMovable(true)
@@ -8243,30 +8713,47 @@ local function CreatePrompt()
     f.title:SetPoint("CENTER", f.TitleBg, "CENTER", 0, 0)
     f.title:SetText("RedGuild - Bid")
 
-    f.icon = f:CreateTexture(nil, "ARTWORK")
-    f.icon:SetSize(34, 34)
-    f.icon:SetPoint("TOPLEFT", f, "TOPLEFT", 16, -34)
+    -- Both the icon and the name are hover targets: people reach for
+    -- whichever one their eye lands on first, and a tooltip that only
+    -- works on half the item is worse than none at all.
+    local function ItemTooltipOn(self)
+        if not RedGuild_Auction.itemLink then return end
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetHyperlink(RedGuild_Auction.itemLink)
+        GameTooltip:Show()
+    end
+    local function ItemTooltipOff() GameTooltip:Hide() end
+
+    f.iconBtn = CreateFrame("Button", nil, f)
+    f.iconBtn:SetSize(34, 34)
+    f.iconBtn:SetPoint("TOPLEFT", f, "TOPLEFT", 16, -34)
+    f.iconBtn:EnableMouse(true)
+    -- The template's inset sits over the body of the frame, so both
+    -- hover targets are lifted above it or they never see the mouse.
+    f.iconBtn:SetFrameLevel(f:GetFrameLevel() + 5)
+    f.iconBtn:SetScript("OnEnter", ItemTooltipOn)
+    f.iconBtn:SetScript("OnLeave", ItemTooltipOff)
+
+    f.icon = f.iconBtn:CreateTexture(nil, "ARTWORK")
+    f.icon:SetAllPoints(f.iconBtn)
 
     f.itemBtn = CreateFrame("Button", nil, f)
-    f.itemBtn:SetPoint("TOPLEFT", f.icon, "TOPRIGHT", 8, 0)
+    f.itemBtn:SetPoint("TOPLEFT", f.iconBtn, "TOPRIGHT", 8, 0)
     f.itemBtn:SetPoint("TOPRIGHT", f, "TOPRIGHT", -16, -34)
     f.itemBtn:SetHeight(34)
+    f.itemBtn:EnableMouse(true)
+    f.itemBtn:SetFrameLevel(f:GetFrameLevel() + 5)
 
     f.itemText = f.itemBtn:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     f.itemText:SetAllPoints(f.itemBtn)
     f.itemText:SetJustifyH("LEFT")
     f.itemText:SetWordWrap(true)
 
-    f.itemBtn:SetScript("OnEnter", function(self)
-        if not RedGuild_Auction.itemLink then return end
-        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        GameTooltip:SetHyperlink(RedGuild_Auction.itemLink)
-        GameTooltip:Show()
-    end)
-    f.itemBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    f.itemBtn:SetScript("OnEnter", ItemTooltipOn)
+    f.itemBtn:SetScript("OnLeave", ItemTooltipOff)
 
     f.balText = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    f.balText:SetPoint("TOPLEFT", f.icon, "BOTTOMLEFT", 0, -10)
+    f.balText:SetPoint("TOPLEFT", f.iconBtn, "BOTTOMLEFT", 0, -10)
 
     f.timerText = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     f.timerText:SetPoint("TOPRIGHT", f, "TOPRIGHT", -16, -80)
@@ -8297,7 +8784,7 @@ local function CreatePrompt()
     -- confused for one another under raid pressure.
     f.bidBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
     f.bidBtn:SetSize(92, 24)
-    f.bidBtn:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 16, 14)
+    f.bidBtn:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 16, 44)
     f.bidBtn:SetText("|TInterface\\Icons\\INV_Misc_Coin_01:14:14:0:0|t Bid")
     f.bidBtn:SetScript("OnClick", function()
         RedGuild_Auction_SendBid(f.amountBox:GetNumber(), "MS")
@@ -8305,17 +8792,31 @@ local function CreatePrompt()
 
     f.osBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
     f.osBtn:SetSize(102, 24)
-    f.osBtn:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -16, 14)
+    f.osBtn:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -16, 44)
     f.osBtn:SetText("|TInterface\\Buttons\\UI-GroupLoot-Dice-Up:16:16:0:0|t Roll OS")
     f.osBtn:SetScript("OnClick", function()
         RedGuild_Auction_SendBid(0, "OS")
     end)
 
-    -- There is no Pass button. Dismissing the window is the pass, so
-    -- the close box and Escape both go through here. Every deliberate
-    -- hide from the addon happens after the auction is closed or after
-    -- a bid was recorded, and both are covered by the guards below, so
-    -- only a genuine dismissal reaches SendBid.
+    -- Passing on purpose is a deliberate click on its own row, well
+    -- clear of Bid and Roll OS, so it cannot be hit by accident while
+    -- reaching for either of them. Because it is deliberate, it does
+    -- not ask for confirmation - it just passes.
+    f.passBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    f.passBtn:SetSize(110, 22)
+    f.passBtn:SetPoint("BOTTOM", f, "BOTTOM", 0, 14)
+    f.passBtn:SetText("|TInterface\\Buttons\\UI-GroupLoot-Pass-Up:16:16:0:0|t Pass")
+    f.passBtn:SetScript("OnClick", function()
+        -- SendBid records the pass and hides the window; the OnHide
+        -- guard below sees myBid and stays quiet, so no popup appears.
+        RedGuild_Auction_SendBid(0, "PASS")
+    end)
+
+    -- Dismissing the window is also a pass, so the close box and
+    -- Escape both go through here. Every deliberate hide from the
+    -- addon happens after the auction is closed or after a bid was
+    -- recorded, and both are covered by the guards below, so only a
+    -- genuine dismissal reaches the confirmation.
     f:SetScript("OnHide", function()
         if not RedGuild_Auction.open then return end
         if RedGuild_Auction.myBid then return end
@@ -8332,6 +8833,16 @@ local function CreatePrompt()
         self.acc = (self.acc or 0) + elapsed
         if self.acc < 0.2 then return end
         self.acc = 0
+
+        -- Read the balance every tick rather than once at open, and
+        -- show nothing at all until the sync lands. A number that is
+        -- known to be wrong is worse than no number: people bid off it.
+        if RedGuild_Auction_DKPStale() then
+            self.balText:SetText("Your DKP: |cffffff00syncing...|r")
+        else
+            self.balText:SetText(string.format("Your DKP: |cff00ff00%d|r",
+                RedGuild_Auction_GetBalance(UnitName("player"))))
+        end
 
         if not RedGuild_Auction.open then
             self.timerText:SetText("|cffff5555Closed|r")
@@ -8370,7 +8881,11 @@ function RedGuild_Auction_ShowPrompt()
     f.icon:SetTexture(
         (RedGuild_Auction.itemID and GetItemIcon(RedGuild_Auction.itemID))
         or "Interface\\Icons\\INV_Misc_QuestionMark")
-    f.balText:SetText(string.format("Your DKP: |cff00ff00%d|r", bal))
+    if RedGuild_Auction_DKPStale() then
+        f.balText:SetText("Your DKP: |cffffff00syncing...|r")
+    else
+        f.balText:SetText(string.format("Your DKP: |cff00ff00%d|r", bal))
+    end
     f.amountBox:SetText("")
     f:Show()
 end
@@ -8461,7 +8976,7 @@ local function CreateMaster()
         if RedGuild_Auction.itemLink then
             GameTooltip:SetHyperlink(RedGuild_Auction.itemLink)
         else
-            GameTooltip:SetText("Drag an item here, or shift-click one into the box.")
+            GameTooltip:SetText("Drag an item here, shift-click one into the box,\nor use Loot for an item nobody has picked up yet.")
         end
         GameTooltip:Show()
     end)
@@ -8511,6 +9026,28 @@ local function CreateMaster()
     f.durBox:SetNumeric(true)
     f.durBox:SetText(tostring(AUCTION_DEFAULT_DURATION))
     f.durBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+
+    -- Loads an item straight out of an open loot window. Items that
+    -- have not been picked up cannot be dragged onto the cursor, so
+    -- the drop slot alone can never reach them.
+    f.lootBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    f.lootBtn:SetSize(58, 20)
+    f.lootBtn:SetPoint("LEFT", f.durBox, "RIGHT", 8, 0)
+    f.lootBtn:SetText("Loot")
+    f.lootBtn:SetScript("OnClick", function() RedGuild_Auction_ToggleLootPicker() end)
+    f.lootBtn:SetScript("OnShow", function() RedGuild_Auction_UpdateLootButton() end)
+    f.lootBtn:SetScript("OnHide", function()
+        if RedGuildAuctionLootPicker then RedGuildAuctionLootPicker:Hide() end
+    end)
+    f.lootBtn:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:AddLine("|cffffff00Take from loot|r")
+        GameTooltip:AddLine("Pick an item out of the open loot window,", 1, 1, 1)
+        GameTooltip:AddLine("before anybody has looted it.", 1, 1, 1)
+        GameTooltip:AddLine("Shift-click a loot item also works while this window is open.", 0.6, 0.6, 0.6)
+        GameTooltip:Show()
+    end)
+    f.lootBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
     f.startBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
     f.startBtn:SetSize(62, 22)
@@ -8614,6 +9151,231 @@ local function CreateMaster()
 
     auctionMaster = f
     return f
+end
+
+--------------------------------------------------
+-- Loot window integration
+--------------------------------------------------
+-- An item lying in an open loot window cannot be picked up onto the
+-- cursor, so the drop slot can never receive it and shift-clicking it
+-- only works while the link box happens to have focus. Instead we read
+-- the loot slots directly, which lets an editor post an item for
+-- bidding before anybody has looted it.
+
+local AUCTION_LOOT_MAX_ROWS = 12
+local auctionLootPicker
+
+-- Returns the item slots of the currently open loot window. Money and
+-- currency slots have no item link and are skipped.
+local function AuctionLootSlots()
+    local out = {}
+    if not GetNumLootItems or not GetLootSlotLink then return out end
+
+    for slot = 1, (GetNumLootItems() or 0) do
+        local isItem = true
+        if GetLootSlotType then
+            isItem = (GetLootSlotType(slot) == (LOOT_SLOT_ITEM or 1))
+        end
+
+        local link = isItem and GetLootSlotLink(slot) or nil
+        if link then
+            local texture, _, quantity
+            if GetLootSlotInfo then
+                texture, _, quantity = GetLootSlotInfo(slot)
+            end
+            table.insert(out, {
+                slot     = slot,
+                link     = link,
+                texture  = texture,
+                quantity = (quantity and quantity > 1) and quantity or nil,
+            })
+        end
+    end
+
+    return out
+end
+
+local function CreateLootPicker()
+    if auctionLootPicker then return auctionLootPicker end
+
+    local parent = _G.RedGuildAuctionFrame
+    if not parent then return nil end
+
+    local p = CreateFrame("Frame", "RedGuildAuctionLootPicker", parent,
+        BackdropTemplateMixin and "BackdropTemplate" or nil)
+    p:SetFrameStrata("DIALOG")
+    p:SetSize(260, 40)
+    p:EnableMouse(true)
+    p:Hide()
+
+    if p.SetBackdrop then
+        p:SetBackdrop({
+            bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background",
+            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+            tile = true, tileSize = 16, edgeSize = 16,
+            insets = { left = 4, right = 4, top = 4, bottom = 4 },
+        })
+    end
+
+    p.rows = {}
+    for i = 1, AUCTION_LOOT_MAX_ROWS do
+        local row = CreateFrame("Button", nil, p)
+        row:SetSize(244, 18)
+        row:SetPoint("TOPLEFT", p, "TOPLEFT", 8, -8 - (i - 1) * 18)
+
+        row.icon = row:CreateTexture(nil, "ARTWORK")
+        row.icon:SetSize(16, 16)
+        row.icon:SetPoint("LEFT", row, "LEFT", 0, 0)
+
+        row.text = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        row.text:SetPoint("LEFT", row.icon, "RIGHT", 6, 0)
+        row.text:SetPoint("RIGHT", row, "RIGHT", -2, 0)
+        row.text:SetJustifyH("LEFT")
+
+        row.hl = row:CreateTexture(nil, "HIGHLIGHT")
+        row.hl:SetAllPoints(row)
+        row.hl:SetColorTexture(1, 1, 1, 0.15)
+
+        row:SetScript("OnClick", function(self)
+            if self.link then
+                RedGuild_Auction_SetItem(self.link)
+            end
+            p:Hide()
+        end)
+
+        row:SetScript("OnEnter", function(self)
+            if not self.link then return end
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            -- Prefer the live loot slot so the tooltip carries the
+            -- looted-quantity line; fall back to the plain link.
+            if self.slot and GameTooltip.SetLootItem and (GetNumLootItems() or 0) >= self.slot then
+                GameTooltip:SetLootItem(self.slot)
+            else
+                GameTooltip:SetHyperlink(self.link)
+            end
+            GameTooltip:Show()
+        end)
+        row:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+        row:Hide()
+        p.rows[i] = row
+    end
+
+    auctionLootPicker = p
+    return p
+end
+
+-- Repaints the open picker. Also closes it when the loot window goes
+-- away, so it can never hand out a stale slot.
+function RedGuild_Auction_RefreshLootPicker()
+    local p = auctionLootPicker
+    if not p or not p:IsShown() then return end
+
+    local items = AuctionLootSlots()
+    if #items == 0 then
+        p:Hide()
+        return
+    end
+
+    local shown = math.min(#items, AUCTION_LOOT_MAX_ROWS)
+    for i = 1, shown do
+        local it  = items[i]
+        local row = p.rows[i]
+        row.slot = it.slot
+        row.link = it.link
+        row.icon:SetTexture(it.texture or "Interface\\Icons\\INV_Misc_QuestionMark")
+        row.text:SetText(it.quantity and (it.link .. " x" .. it.quantity) or it.link)
+        row:Show()
+    end
+    for i = shown + 1, AUCTION_LOOT_MAX_ROWS do
+        p.rows[i]:Hide()
+    end
+
+    p:SetHeight(16 + shown * 18)
+end
+
+function RedGuild_Auction_ToggleLootPicker()
+    local p = CreateLootPicker()
+    if not p then return end
+
+    if p:IsShown() then
+        p:Hide()
+        return
+    end
+
+    if #AuctionLootSlots() == 0 then
+        AuctionPrint("No loot window open. Open the corpse or chest first, then pick the item here.")
+        return
+    end
+
+    p:ClearAllPoints()
+    local anchor = _G.RedGuildAuctionFrame and _G.RedGuildAuctionFrame.lootBtn
+    if anchor then
+        p:SetPoint("TOPRIGHT", anchor, "BOTTOMRIGHT", 0, -2)
+    else
+        p:SetPoint("TOP", _G.RedGuildAuctionFrame, "TOP", 0, -60)
+    end
+
+    p:Show()
+    RedGuild_Auction_RefreshLootPicker()
+end
+
+-- Enables the button and shows the slot count only while there is
+-- actually a loot window to read.
+function RedGuild_Auction_UpdateLootButton()
+    local f = _G.RedGuildAuctionFrame
+    if not f or not f.lootBtn then return end
+
+    local n = #AuctionLootSlots()
+    if n > 0 then
+        f.lootBtn:SetText("Loot (" .. n .. ")")
+        f.lootBtn:Enable()
+    else
+        f.lootBtn:SetText("Loot")
+        f.lootBtn:Disable()
+    end
+end
+
+--------------------------------------------------
+-- Loot events
+--------------------------------------------------
+-- Kept on its own frame so the core event handler stays untouched.
+local auctionLootEvents = CreateFrame("Frame")
+auctionLootEvents:RegisterEvent("LOOT_OPENED")
+auctionLootEvents:RegisterEvent("LOOT_CLOSED")
+auctionLootEvents:RegisterEvent("LOOT_SLOT_CLEARED")
+auctionLootEvents:SetScript("OnEvent", function()
+    -- LOOT_SLOT_CLEARED fires before the slot is really gone, so the
+    -- repaint is deferred a frame where a timer is available.
+    local function refresh()
+        RedGuild_Auction_UpdateLootButton()
+        RedGuild_Auction_RefreshLootPicker()
+    end
+    refresh()
+    if C_Timer and C_Timer.After then C_Timer.After(0, refresh) end
+end)
+
+--------------------------------------------------
+-- Shift-click a loot item straight into the window
+--------------------------------------------------
+if type(_G.LootFrameItem_OnClick) == "function" then
+    hooksecurefunc("LootFrameItem_OnClick", function(self, button)
+        if button and button ~= "LeftButton" then return end
+        if not IsModifiedClick("CHATLINK") then return end
+
+        local f = _G.RedGuildAuctionFrame
+        if not f or not f:IsShown() then return end
+        -- The link box has its own ChatEdit_InsertLink path; letting
+        -- both run would load the item twice.
+        if f.itemBox and f.itemBox:HasFocus() then return end
+        -- Never steal a link the user meant for an open chat box.
+        if ChatEdit_GetActiveWindow and ChatEdit_GetActiveWindow() then return end
+
+        local link = GetLootSlotLink and GetLootSlotLink(self:GetID())
+        if link then
+            RedGuild_Auction_SetItem(link)
+        end
+    end)
 end
 
 function RedGuild_Auction_RefreshMaster()
