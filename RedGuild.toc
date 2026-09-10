@@ -23,4 +23,18 @@ libs\LibDBIcon-1.0\LibDBIcon-1.0.lua
 libs\LibDBIcon-1.0\embeds.xml
 
 
-RedGuild.lua
+RedGuild_Core.lua
+RedGuild_Panel.lua
+RedGuild_UI.lua
+RedGuild_DKP.lua
+RedGuild_Alt.lua
+RedGuild_Group.lua
+RedGuild_ML.lua
+RedGuild_Raid.lua
+RedGuild_Editors.lua
+RedGuild_Audit.lua
+RedGuild_Sync.lua
+RedGuild_Popups.lua
+RedGuild_Events.lua
+RedGuild_Auction.lua
+RedGuild_BidLog.lua
