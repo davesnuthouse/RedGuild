@@ -6,3 +6,7 @@ Minfor bugs:
 * Editors decline force sync not showing/working?
 * Version control on editors tab isn't right and we need that functionality to fix/improve lots of other things
 * ML tab not resetting people no longer in the raid/group
+* Some buttons have higher prio than windows you drag over them
+* Test position adjustment for text that's infront/behind of things
+* Sync info "your version" doesn't display correctly
+* Alt tracker sync not working properly
