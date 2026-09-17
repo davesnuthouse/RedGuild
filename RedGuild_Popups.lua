@@ -293,6 +293,15 @@ StaticPopupDialogs["REDGUILD_NEW_WEEK"] = {
 			local balance    = tonumber(d.balance)    or 0
 			local attendance = tonumber(d.attendance) or 0
 
+			-- The before-state, so the audit line below can show a
+			-- real old -> new in the From/To columns instead of a
+			-- sentence that fits in neither.
+			local oldLastWeek = tonumber(d.lastWeek) or 0
+			local hadActivity = (tonumber(d.onTime) or 0) > 0
+			                 or attendance > 0
+			                 or (tonumber(d.bench) or 0) > 0
+			                 or (tonumber(d.spent) or 0) > 0
+
 			-- Original functionality: add attendance into lastWeek
 			local rawTransfer = balance + attendance
 
@@ -309,18 +318,49 @@ StaticPopupDialogs["REDGUILD_NEW_WEEK"] = {
 				d.balance = 0
 			end
 
+			-- Credit the session that is closing, before the fields
+			-- that decide it are wiped below. Anyone who earned
+			-- On-Time, Attendance or spent DKP took part in it;
+			-- anyone left holding Bench DKP sat it out.
+			if (tonumber(d.onTime) or 0) > 0
+			   or (tonumber(d.attendance) or 0) > 0
+			   or (tonumber(d.spent) or 0) > 0
+			then
+				RedGuild_BumpAttendance(d)
+			end
+
+			if (tonumber(d.bench) or 0) > 0 then
+				RedGuild_BumpBenched(d)
+			end
+
 			-- Reset weekly fields
 			d.onTime     = 0
 			d.attendance = 0
 			d.bench      = 0
 			d.spent      = 0
 
-			LogAudit(
-				name,
-				"DKP Session Change",
-				"moved "..transfer.." (from balance + attendance)",
-				"new session start"
-			)
+			-- What a session rollover actually does to a player is
+			-- move their balance into Old Bal, so that is what gets
+			-- logged: Old Bal before -> Old Bal after. It used to
+			-- write a sentence into both the From and To columns
+			-- ("moved 144 (from balance + attendance)" -> "new
+			-- session start"), which fit in neither and told you
+			-- nothing you could read at a glance.
+			--
+			-- Players who had nothing to carry and nothing to reset
+			-- are skipped entirely. A rollover did not change them,
+			-- and a log where most lines read "0 -> 0" buries the
+			-- ones that matter.
+			if transfer ~= oldLastWeek or balance ~= d.balance or hadActivity then
+				LogAudit(
+					name,
+					"New Session",
+					oldLastWeek,
+					(rawTransfer > transfer)
+						and (transfer .. " (capped)")
+						or  transfer
+				)
+			end
 		end
 
 		BumpDKPVersion()

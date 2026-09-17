@@ -40,7 +40,7 @@ function RedGuild_UpdateEditorTabVisibility()
     if not tabs[TAB_BIDLOG] then return end   -- CreateUI hasn't run yet
 
     local editor = IsEditor(UnitName("player"))
-    for _, idx in ipairs({ TAB_BIDLOG, TAB_RAID, TAB_EDITORS, TAB_AUDIT }) do
+    for _, idx in ipairs({ TAB_BIDLOG, TAB_RAID, TAB_EDITORS, TAB_AUDIT, TAB_ATTEND }) do
         local tab = tabs[idx]
         if tab then
             if editor then tab:Show() else tab:Hide() end
@@ -69,6 +69,11 @@ function ShowTab(id)
         end
     end
 
+    -- Before anything is hidden: an open DKP cell edit must not be
+    -- carried across to another tab, where losing focus would commit
+    -- it (see RedGuild_CancelDKPInlineEdit).
+    if RedGuild_CancelDKPInlineEdit then RedGuild_CancelDKPInlineEdit() end
+
     dkpPanel:Hide()
 	altPanel:Hide()
     groupPanel:Hide()
@@ -77,6 +82,7 @@ function ShowTab(id)
     editorsPanel:Hide()
     auditPanel:Hide()
 	if bidLogPanel then bidLogPanel:Hide() end
+	if attendancePanel then attendancePanel:Hide() end
 
     if id == TAB_DKP then
         dkpPanel:Show()
@@ -97,6 +103,11 @@ function ShowTab(id)
             bidLogPanel:Show()
             RedGuild_BidLog_Refresh()
         end
+    elseif id == TAB_ATTEND then
+        if attendancePanel then
+            attendancePanel:Show()
+            RedGuild_RefreshAttendanceTable()
+        end
     end
 end
 
@@ -110,8 +121,6 @@ headers = {
     { text = "Bench",      width = 55  },
     { text = "Spent",      width = 55  },
     { text = "Live Bal",   width = 65  },
-	{ text = "Rotated",  width = 55  },
-    { text = "",           width = 55  },
 }
 
 fieldMap = {
@@ -124,8 +133,6 @@ fieldMap = {
     [7] = "bench",
     [8] = "spent",
     [9] = "balance",
-    [10] = "rotated",
-	[11] = "whisper",
 }
 
 -- Class → Spec list (Blizzard internal spec names)
@@ -232,7 +239,7 @@ dkpRows = {}
 dkpSortedNames = {}
 dkpHeaderButtons = {}
 editorRows = {}
-auditRows = {}
+-- auditRows lives in RedGuild_Audit.lua, alongside the table that owns it.
 currentSortField = "name"
 currentSortAscending = true
 
@@ -427,76 +434,6 @@ function CreateDKPRow()
                 UpdateTable()
             end)
 
-        elseif field == "rotated" then
-            col = CreateFrame("Button", nil, row)
-            col:SetPoint("LEFT", row, "LEFT", colX, 0)
-            col:SetSize(h.width, ROW_HEIGHT)
-
-            local fs = col:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-            fs:SetAllPoints(col)
-            fs:SetJustifyH("LEFT")
-            col:SetFontString(fs)
-
-            col:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
-            col:GetHighlightTexture():SetAlpha(0.3)
-
-            col:SetScript("OnMouseDown", function(self, button)
-                if dkpLocked then return end
-                if not IsAuthorized() then return end
-
-                local rowIndex = row.index
-                if not rowIndex then return end
-
-                local name = row.name
-                if not name then return end
-
-                local d = RedGuild_Data[name]
-                if not d then return end
-
-                local old = tonumber(d.rotated) or 0
-                local new = old
-
-                if button == "LeftButton" then
-                    new = old + 1
-                elseif button == "RightButton" then
-                    new = math.max(0, old - 1)
-                end
-
-                if new ~= old then
-                    d.rotated = new
-                    LogAudit(name, "rotations", old, new)
-                    UpdateTable()
-                end
-            end)
-
-        elseif field == "whisper" then
-            col = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
-            col:SetPoint("LEFT", row, "LEFT", colX + 5, 0)
-            col:SetSize(h.width - 10, 16)
-            col:SetText("Tell")
-
-            row.tellButton = col
-
-            col:SetScript("OnClick", function()
-                local index = row.index
-                if not index then return end
-                local player = row.name
-                if not player then return end
-                local d = RedGuild_Data[player]
-                if not d then return end
-                local msg = string.format(
-                    "Your DKP: Previous=%d, OnTime=%d, PostRaid(Attend)=%d, Bench=%d, Spent=%d, CURRENTBalance=%d",
-                    d.lastWeek or 0,
-                    d.onTime or 0,
-                    d.attendance or 0,
-                    d.bench or 0,
-                    d.spent or 0,
-                    d.balance or 0
-                )
-                SendChatMessage(msg, "WHISPER", nil, player)
-                Print("Whisper sent to " .. player)
-            end)
-
         elseif field == "balance" then
             col = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
             col:SetPoint("LEFT", row, "LEFT", colX, 0)
@@ -646,8 +583,12 @@ end
                     dkp[fieldName] = num
                     RecalcBalance(dkp)
 
-                    if num == 69 then
-                        print("|cff00ff00Nice!|r")
+                    -- Local only: the player whose number this is may
+                    -- well be offline, and a failed whisper puts a red
+                    -- error in the editor's chat for no reason.
+                    if num == (REDGUILD_NICE_NUMBER or 69) then
+                        print(string.format("|cff00ff00%d, nice!|r",
+                            REDGUILD_NICE_NUMBER or 69))
                     end
 
                     LogAudit(playerName, fieldName, old, num)
@@ -770,9 +711,6 @@ function UpdateTable()
         if field == "msRole" or field == "osRole" then
             va = tostring(da[field] or "")
             vb = tostring(db[field] or "")
-        elseif field == "rotated" then
-            va = tonumber(da.rotated) or 0
-            vb = tonumber(db.rotated) or 0
         else
             va = tonumber(da[field]) or 0
             vb = tonumber(db[field]) or 0
@@ -836,7 +774,6 @@ function UpdateTable()
 			d.attendance = d.attendance or 0
 			d.bench      = d.bench      or 0
 			d.spent      = d.spent      or 0
-			d.rotated    = d.rotated    or 0
 			d.balance    = d.balance    or 0
 			
 			----------------------------------------------------------------
@@ -885,11 +822,7 @@ function UpdateTable()
                 row.offSpecBtn:EnableMouse(not dkpLocked)
             end
 
-            if row.tellButton then
-                row.tellButton:Show()
-            end
-			
-			-- DELETE BUTTON VISIBILITY
+            -- DELETE BUTTON VISIBILITY
 			if dkpLocked or not IsEditor(UnitName("player")) then
 				row.deleteButton:Hide()
 			else
@@ -931,7 +864,6 @@ function UpdateTable()
             row.cols[7]:SetText(d.bench or 0)
             row.cols[8]:SetText(d.spent or 0)
             row.cols[9]:SetText(ColorizeBalance(d))
-            row.cols[10]:SetText(tonumber(d.rotated) or 0)
 
         else
             row:Hide()
@@ -944,51 +876,6 @@ function UpdateTable()
     -- SCROLL HEIGHT
     ----------------------------------------------------------------
     dkpScrollChild:SetHeight(totalRows * rowHeight + rowHeight)
-end
-
-function UpdateAuditLog()
-    if not auditRows or not RedGuild_Audit then return end
-	
-	-- Remove entries older than 30 days
-	local cutoff = time() - (30 * 24 * 60 * 60)  -- 30 days in seconds
-
-	for i = #RedGuild_Audit, 1, -1 do
-		local entry = RedGuild_Audit[i]
-		if entry and entry.time then
-			local ts = ParseAuditTime(entry.time)
-			if ts and ts < cutoff then
-				table.remove(RedGuild_Audit, i)
-			end
-		end
-	end
-
-    table.sort(RedGuild_Audit, function(a, b)
-        if not a.time or not b.time then
-            return false
-        end
-        return ParseAuditTime(a.time) > ParseAuditTime(b.time)   -- newest first
-    end)
-
-    for i, row in ipairs(auditRows) do
-        local entry = RedGuild_Audit[i]
-
-        if entry then
-            local t  = entry.time   or "unknown"
-            local s  = entry.editor or "unknown"
-            local n  = entry.name   or "unknown"
-            local f  = entry.field  or "unknown"
-            local o  = (entry.old ~= nil) and tostring(entry.old) or "nil"
-            local nw = (entry.new ~= nil) and tostring(entry.new) or "nil"
-
-            row.text:SetText(string.format("[%s] %s changed %s's %s from %s to %s",
-                t, s, n, f, o, nw
-            ))
-
-            row:Show()
-        else
-            row:Hide()
-        end
-    end
 end
 
 -- Lists the guild's current rank 1 / rank 5 members - editor status

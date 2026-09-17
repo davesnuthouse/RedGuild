@@ -172,7 +172,8 @@ if event == "CHAT_MSG_ADDON" then
         msg:match("^([^:]+):([^:]+):(%d+):(%d+):(%d+):(.*)$")
 
     if pfx2 == REDGUILD_CHAT_PREFIX
-       and (chunkType == "DATA" or chunkType == "FORCE_REQ" or chunkType == "ALTS_DATA")
+       and (chunkType == "DATA" or chunkType == "FORCE_REQ"
+            or chunkType == "ALTS_DATA" or chunkType == "ATTEND_DATA")
     then
         local seq   = tonumber(seqStr)
         local part  = tonumber(partStr)
@@ -275,6 +276,14 @@ if event == "CHAT_MSG_ADDON" then
 				RedGuild_Config.lastAltSync     = date("%Y-%m-%d %H:%M:%S")
 				RedGuild_Config.lastAltSyncFrom = sender
 				UpdateSyncStatus()
+				return
+			end
+
+			-------------------------------------------------
+			-- ATTENDANCE SNAPSHOT (editor to editor)
+			-------------------------------------------------
+			if chunkType == "ATTEND_DATA" then
+				ApplyAttendanceSync(entry.from or sender, full)
 				return
 			end
 
@@ -554,10 +563,9 @@ do
 
                 local balance = tonumber(d.balance or 0) or 0
 
-                -- Easter egg: 69 → NICE!
                 local suffix = ""
-                if balance == 69 then
-                    suffix = "  NICE!"
+                if balance == (REDGUILD_NICE_NUMBER or 69) then
+                    suffix = " - nice!"
                 end
 
                 local reply = string.format("Your DKP: %d%s", balance, suffix)

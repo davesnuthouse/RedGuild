@@ -11,7 +11,7 @@ RedGuild_Audit  	= RedGuild_Audit  or {}
 RedGuild_Usage  	= RedGuild_Usage  or {}
 
 addonName      = ...
-REDGUILD_VERSION = "3.0.69"
+REDGUILD_VERSION = "3.1.69"
 
 REDGUILD_CHAT_PREFIX = "REDGUILD"
 
@@ -45,6 +45,7 @@ TAB_BIDLOG  = 5
 TAB_RAID    = 6
 TAB_EDITORS = 7
 TAB_AUDIT   = 8
+TAB_ATTEND  = 9
 
 activeTab = TAB_DKP
 dkpLocked = true
@@ -66,9 +67,10 @@ LibDeflate   = LibStub("LibDeflate")
 
 -- Ensure inbound chunk buffers exist
 REDGUILD_Inbound = REDGUILD_Inbound or {
-    DATA      = {},
-    FORCE_REQ = {},
-	ALTS_DATA  = {},
+    DATA        = {},
+    FORCE_REQ   = {},
+	ALTS_DATA   = {},
+	ATTEND_DATA = {},
 }
 
 -- Payloads that already assembled, keyed the same way as the buckets.
@@ -364,6 +366,10 @@ end
 -- bytes, so 220 bytes of chunk data leaves a safe margin without
 -- risking truncation. Bigger than the old 200 means fewer chunks -
 -- and fewer addon messages - for every sync.
+-- Shared so the DKP table, the !dkp reply and the auction all agree
+-- on which number is worth mentioning.
+REDGUILD_NICE_NUMBER = 69
+
 REDGUILD_MAX_CHUNK = 220
 RedGuild_OutboundSeq = 0
 RedGuild_Data   = RedGuild_Data   or {}
@@ -542,7 +548,7 @@ end
 
 local function RedGuild_GetSyncChannel(msgType, target)
     -- Live bidding traffic: bidder -> auctioneer
-    if msgType == "BID_PLACE" then
+    if msgType == "BID_PLACE" or msgType == "BID_TIEPASS" then
         if not target or target == "" then return nil, nil end
         return "WHISPER", GetExactName(target)
     end
@@ -614,6 +620,14 @@ local function RedGuild_GetSyncChannel(msgType, target)
         return "WHISPER", GetExactName(target)
     end
 
+    -- ATTEND_DATA never goes guild-wide: attendance is editor-only
+    -- bookkeeping, pushed by hand from the Attendance tab straight to
+    -- the other editor, so nobody else spends bandwidth carrying it.
+    if msgType == "ATTEND_DATA" then
+        if not target or target == "" then return nil, nil end
+        return "WHISPER", GetExactName(target)
+    end
+
     -- Everything else → guild
     return "GUILD", nil
 end
@@ -649,10 +663,14 @@ if RedGuild_Config.hideMeFromSync then
     -- RESEND only asks for parts of a payload this client was already
     -- sent, so opting out of broadcasting must not leave it stuck with
     -- a half-received table.
+    -- ATTEND_DATA is likewise exempt: it only ever goes out because an
+    -- editor pressed Sync on the Attendance tab, and it is not part of
+    -- the DKP broadcast this opt-out is about.
     if msgType ~= "ALTS_REQ" and
        msgType ~= "ALTS_DATA" and
        msgType ~= "RESEND" and
        msgType:sub(1, 4) ~= "BID_" and
+       msgType ~= "ATTEND_DATA" and
        msgType ~= "ALTS_UPDATE" then
         return
     end
@@ -684,7 +702,8 @@ end
 	local isChunked =
 		msgType == "DATA" or
 		msgType == "FORCE_REQ" or
-		msgType == "ALTS_DATA"
+		msgType == "ALTS_DATA" or
+		msgType == "ATTEND_DATA"
 
 	if not isChunked then
 		local msg = string.format("%s:%s:%s", REDGUILD_CHAT_PREFIX, msgType, payload)
@@ -743,15 +762,16 @@ function EnsurePlayer(name)
 
     -- Create a safe, complete DKP record
     d = {
-        class      = "UNKNOWN",
-        msRole     = "UNKNOWN",
-        osRole     = "UNKNOWN",
-        lastWeek   = 0,
-        onTime     = 0,
-        attendance = 0,
-        bench      = 0,
-        spent      = 0,
-        rotated    = 0,
+        class          = "UNKNOWN",
+        msRole         = "UNKNOWN",
+        osRole         = "UNKNOWN",
+        lastWeek       = 0,
+        onTime         = 0,
+        attendance     = 0,
+        bench          = 0,
+        spent          = 0,
+        raidsAttended  = 0,
+        benched        = 0,
     }
 
     RedGuild_Data[name] = d
@@ -772,6 +792,38 @@ end
 
 function BumpDKPVersion()
     RedGuild_Config.dkpVersion = (RedGuild_Config.dkpVersion or 0) + 1
+end
+
+-- Marks one more session attended, shown on the editor-only
+-- Attendance tab. Called from exactly one place: starting a new DKP
+-- session (RedGuild_Popups.lua), for anyone who closed the session
+-- with On-Time, Attendance or Spent above zero. Allocating those
+-- mid-week deliberately does not count on its own - a session is the
+-- unit here, so taking part in one counts once however many raids,
+-- allocations or won items it contained, and it works the same
+-- whether the numbers came from the popups or were typed straight
+-- into the DKP table.
+-- The day check below is only there so clicking New Week twice in one
+-- day cannot count the same session twice.
+function RedGuild_BumpAttendance(d)
+    if not d then return end
+    local today = date("%Y-%m-%d")
+    if d.lastAttendance ~= today then
+        d.raidsAttended  = (tonumber(d.raidsAttended) or 0) + 1
+        d.lastAttendance = today
+    end
+end
+
+-- The bench equivalent, triggered the same way and for the same
+-- reason: at a new DKP session, for anyone holding Bench DKP as that
+-- session closes.
+function RedGuild_BumpBenched(d)
+    if not d then return end
+    local today = date("%Y-%m-%d")
+    if d.lastBenched ~= today then
+        d.benched     = (tonumber(d.benched) or 0) + 1
+        d.lastBenched = today
+    end
 end
 
 function PopulateGuildClasses()

@@ -191,7 +191,20 @@ end
 
 function RefreshMLTools()
     if not mlRows then return end
-	
+
+	-- Drop entries keyed by an old display string rather than a name.
+	-- The list used to hand RefreshMLTools ready-coloured text, so
+	-- every refresh created an ML record under a key like
+	-- "|cff69ccf0Alice|r |cffffffff(main)|r". Scoring went into those,
+	-- while Reset cleared the real names - which is why Reset appeared
+	-- to do nothing. The keys are still in saved data on any client
+	-- that ran the old code, so clear them out here.
+	for name in pairs(RedGuild_ML or {}) do
+		if type(name) ~= "string" or name:find("|c", 1, true) then
+			RedGuild_ML[name] = nil
+		end
+	end
+
 	-- Ensure ML data exists for all DKP players
 	for name in pairs(RedGuild_Data or {}) do
 		EnsureML(name)
@@ -214,28 +227,18 @@ end
 
 table.sort(names)
 
+-- Plain names only. This list is what every lookup downstream keys
+-- off - RedGuild_Data[name], EnsureML(name), the group filter's
+-- comparison against UnitName, and row.name for the click handlers -
+-- so it must hold the name itself. It used to hold a ready-made
+-- display string ("|cff...Alice|r |cffffffff(main)|r"), which matched
+-- none of those: the group filter never found anybody, and EnsureML
+-- created a junk RedGuild_ML entry per row, keyed by colour codes.
+-- The decoration is built at render time instead, where it belongs.
 local filtered = {}
 for _, name in ipairs(names) do
     if IsNameInGuild(name) then
-
-        -- class colour
-        local class = RedGuild_Data[name] and RedGuild_Data[name].class
-        local colour = CLASS_COLORS[class] or "|cffaaaaaa"
-
-                -- main/alt tag (white)
-        local tag = ""
-        if IsMain(name) then
-            tag = " |cffffffff(main)|r"
-        elseif IsAlt(name) then
-            tag = " |cffffffff(alt)|r"
-		else
-			tag = " |cffffffff(unknown)|r"
-        end
-
-        -- final display string (FLAT STRING)
-        local display = colour .. name .. "|r" .. tag
-
-        table.insert(filtered, display)
+        table.insert(filtered, name)
     end
 end
 
@@ -377,7 +380,14 @@ local notesBtn  = row.cols[COL_NOTES]
         )
     end
 
-    nameFS:SetText(hex .. name .. "|r")
+    local tag = " |cffffffff(unknown)|r"
+    if IsMain(name) then
+        tag = " |cffffffff(main)|r"
+    elseif IsAlt(name) then
+        tag = " |cffffffff(alt)|r"
+    end
+
+    nameFS:SetText(hex .. name .. "|r" .. tag)
 
     ------------------------------------------------------------
     -- VALUES

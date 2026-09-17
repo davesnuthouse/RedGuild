@@ -252,15 +252,42 @@ dkpInlineEdit:SetScript("OnEditFocusLost", function(self)
     self:Hide()
 end)
 
-dkpInlineEdit:SetScript("OnHide", function(self)
+-- Forgets what the cell editor was editing. It commits on focus loss,
+-- and focus can be taken long after it is hidden - by a button on
+-- another tab, for instance - at which point saveFunc would write
+-- into a DKP field the editor is no longer looking at. Clearing the
+-- binding means a stale focus event has nothing left to commit.
+function RedGuild_ClearDKPInlineEdit(self)
+    self = self or dkpInlineEdit
+    if not self then return end
+
     self._submitted = false
-    self._handled = false
+    self._handled   = false
+
+    self.saveFunc   = nil
+    self.editPlayer = nil
+    self.editField  = nil
 
     if self.currentFS then
         self.currentFS:Show()
         self.currentFS = nil
     end
-end)
+end
+
+dkpInlineEdit:SetScript("OnHide", RedGuild_ClearDKPInlineEdit)
+
+-- Abandons an open cell edit without saving it. Called when leaving
+-- the DKP tab: the box is parented into the DKP panel, so switching
+-- tabs hides it out from under the editor, and committing whatever
+-- happened to be in it at that point is not something they asked for.
+function RedGuild_CancelDKPInlineEdit()
+    if not dkpInlineEdit then return end
+    if not dkpInlineEdit:IsShown() then return end
+
+    dkpInlineEdit.cancelled = true
+    dkpInlineEdit._handled  = true
+    dkpInlineEdit:Hide()
+end
 
 --------------------------------------------------------------------
 -- ADD PLAYER INPUT

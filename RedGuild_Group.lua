@@ -1,3 +1,33 @@
+--------------------------------------------------------------------
+-- Who is actually picked, independent of what the search box happens
+-- to be showing.
+--
+-- The ticks live in selectedState, which survives a refresh, while
+-- the rows are a small recycled pool that only ever holds the rows
+-- currently visible. Reading the selection off the rows - which is
+-- what this used to do - meant that narrowing the search to find one
+-- more person silently dropped everyone picked under the previous
+-- search term. So the selection is the saved ticks, intersected with
+-- everyone the list would show with an empty search box
+-- (RedGuild_GroupCandidates), which is what drops people who have
+-- since gone invalid or been filtered out by the checkboxes.
+--------------------------------------------------------------------
+function RedGuild_GroupSelectedNames()
+    local names = {}
+    local candidates = RedGuild_GroupCandidates or {}
+
+    for name, isOn in pairs(selectedState or {}) do
+        if isOn and candidates[name] then
+            table.insert(names, name)
+        end
+    end
+
+    -- pairs() order is arbitrary; the info box and the invite queue
+    -- both want a stable list.
+    table.sort(names)
+    return names
+end
+
 function CreateGroupTab()
 --------------------------------------------------------------------
 -- GROUP BUILDER PANEL (INVITER)
@@ -16,7 +46,9 @@ do
     -- LEFT SIDE: SCROLL LIST (HALF WIDTH)
     ------------------------------------------------------------
     local scroll = CreateFrame("ScrollFrame", nil, groupPanel, "UIPanelScrollFrameTemplate")
-    scroll:SetPoint("TOPLEFT", groupPanel, "TOPLEFT", 30, -60)
+    -- -82 rather than -60: the search row sits between the checkbox
+    -- strip and the list.
+    scroll:SetPoint("TOPLEFT", groupPanel, "TOPLEFT", 30, -82)
     scroll:SetPoint("BOTTOMLEFT", groupPanel, "BOTTOMLEFT", 30, 50)
     scroll:SetWidth(groupPanel:GetWidth() * 0.40)
 
@@ -26,6 +58,11 @@ do
 
     local ROW_HEIGHT = 20
     groupRows = {}
+
+    -- name -> true for everyone the list would show if the search box
+    -- were empty. Rebuilt on every refresh; see RefreshGroupBuilder.
+    RedGuild_GroupCandidates = RedGuild_GroupCandidates or {}
+    local groupCandidates = RedGuild_GroupCandidates
 
     ------------------------------------------------------------
     -- RIGHT SIDE: INFO BOX
@@ -72,14 +109,15 @@ do
             unknown = 0,
         }
 
-        for _, row in ipairs(groupRows) do
-			if row.checkbox:GetChecked() and row.name then
-				table.insert(selected, row.name)
+        -- Read from the saved ticks, not the visible rows: with a
+        -- search active most of the selection is off-screen.
+        for _, rowName in ipairs(RedGuild_GroupSelectedNames()) do
+            table.insert(selected, rowName)
 
         ------------------------------------------------------------
         -- SAFE LOOKUP (DKP players have data, guild-only do not)
         ------------------------------------------------------------
-        local d = RedGuild_Data[row.name]
+        local d = RedGuild_Data[rowName]
 
         ------------------------------------------------------------
         -- CLASS COUNT (only DKP players have class data)
@@ -109,7 +147,6 @@ do
             roleCounts.unknown = roleCounts.unknown + 1
         end
     end
-end
 
         local lines = {}
 
@@ -292,6 +329,41 @@ end
 		RefreshGroupBuilder()
 	end)
 
+	------------------------------------------------------------
+	-- SEARCH
+	------------------------------------------------------------
+	-- Filters the list as you type. Ticks already made are kept in
+	-- selectedState, so narrowing the list down to find one more
+	-- person never loses the selection built up so far.
+	local searchLabel = groupPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	-- Its own row under the checkbox strip, sized to sit over the list
+	-- rather than run under the info box on the right.
+	searchLabel:SetPoint("TOPLEFT", groupPanel, "TOPLEFT", 30, -62)
+	searchLabel:SetText("Search:")
+
+	local searchBox = CreateFrame("EditBox", nil, groupPanel, "InputBoxTemplate")
+	searchBox:SetSize(150, 18)
+	searchBox:SetPoint("LEFT", searchLabel, "RIGHT", 8, 0)
+	searchBox:SetAutoFocus(false)
+
+	local clearSearchBtn = CreateFrame("Button", nil, groupPanel, "UIPanelButtonTemplate")
+	clearSearchBtn:SetSize(50, 18)
+	clearSearchBtn:SetPoint("LEFT", searchBox, "RIGHT", 8, 0)
+	clearSearchBtn:SetText("Clear")
+	clearSearchBtn:SetScript("OnClick", function()
+		searchBox:SetText("")
+		searchBox:ClearFocus()
+		RefreshGroupBuilder()
+	end)
+
+	searchBox:SetScript("OnTextChanged", function() RefreshGroupBuilder() end)
+	searchBox:SetScript("OnEscapePressed", function(self)
+		self:SetText("")
+		self:ClearFocus()
+		RefreshGroupBuilder()
+	end)
+	searchBox:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
+
     ------------------------------------------------------------
     -- REFRESH LIST
     ------------------------------------------------------------
@@ -327,6 +399,14 @@ end
 
 		table.sort(names)
 
+        local search = strlower(strtrim(searchBox:GetText() or ""))
+
+        -- Everyone eligible right now, whether or not the search is
+        -- currently showing them. Selections are read from this rather
+        -- than from the visible rows, so narrowing the search down to
+        -- find one more person never drops the ones already ticked.
+        wipe(groupCandidates)
+
         local i = 0
         for _, name in ipairs(names) do
             local isInvalid = RuntimeInvalid(name)
@@ -337,6 +417,17 @@ end
 					if UnitInParty(name) or UnitInRaid(name) then
 						hideThis = true
 					end
+				end
+
+				if not isInvalid and not hideThis then
+					groupCandidates[name] = true
+				end
+
+				-- Plain substring match, not a pattern: a name typed
+				-- with a "-" or any other magic character has to search
+				-- for itself rather than blow up as a pattern.
+				if search ~= "" and not strfind(strlower(name), search, 1, true) then
+					hideThis = true
 				end
 
 				if not isInvalid and not hideThis then
@@ -448,13 +539,12 @@ inviteBtn:SetScript("OnClick", function()
     local pending = {}
     local playerName = Ambiguate(UnitName("player"), "short")
 
-    -- Build list of players to invite
-    for _, row in ipairs(groupRows) do
-        if row:IsShown() and row.checkbox:GetChecked() then
-            local name = row.name
-            if name ~= playerName and not UnitInParty(name) and not UnitInRaid(name) then
-                table.insert(pending, name)
-            end
+    -- Build list of players to invite, from the saved ticks rather
+    -- than the visible rows: with a search active the people picked
+    -- under an earlier search term are off-screen but still selected.
+    for _, name in ipairs(RedGuild_GroupSelectedNames()) do
+        if name ~= playerName and not UnitInParty(name) and not UnitInRaid(name) then
+            table.insert(pending, name)
         end
     end
 
