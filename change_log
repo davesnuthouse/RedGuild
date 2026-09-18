@@ -1,3 +1,11 @@
+3.1.69 Changelog
+-------------------------------------------------------
+Added features:
+* Redesign of DKP Logs
+* Restrict Bid/Roll option for Classes that can't use items
+* Roll for MS/OS instead of only one roll
+* Attendance Logging
+
 3.0.69 Changelog
 -------------------------------------------------------
 Added features:
